@@ -58,7 +58,10 @@ include_directories(
   ${ament_INCLUDE_DIRS}
 )
 
-add_library(xarm_joystick_input SHARED src/xarm_joystick_input.cpp)
+# add_library(xarm_joystick_input SHARED src/xarm_joystick_input.cpp)
+# ament_target_dependencies(xarm_joystick_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
+# rclcpp_components_register_nodes(xarm_joystick_input "xarm_moveit_servo::JoyToServoPub")
+add_library(xarm_joystick_input SHARED src/JoyToServoPub_xArm6.cpp)
 ament_target_dependencies(xarm_joystick_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 rclcpp_components_register_nodes(xarm_joystick_input "xarm_moveit_servo::JoyToServoPub")
 
