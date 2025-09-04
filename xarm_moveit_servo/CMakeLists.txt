@@ -65,6 +65,10 @@ add_library(xarm_joystick_input SHARED src/JoyToServoPub_xArm6.cpp)
 ament_target_dependencies(xarm_joystick_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 rclcpp_components_register_nodes(xarm_joystick_input "xarm_moveit_servo::JoyToServoPub")
 
+add_library(xarm_gello_input SHARED src/GelloToServoPub_xArm6.cpp)
+ament_target_dependencies(xarm_gello_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
+rclcpp_components_register_nodes(xarm_gello_input "xarm_moveit_servo::GelloToServoPub")
+
 add_executable(xarm_keyboard_input
   src/xarm_keyboard_input.cpp
 )
@@ -73,6 +77,7 @@ ament_target_dependencies(xarm_keyboard_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
 install(TARGETS
   xarm_joystick_input
+  xarm_gello_input
   xarm_keyboard_input
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib

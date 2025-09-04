@@ -44,6 +44,8 @@ def launch_setup(context, *args, **kwargs):
     kinematics_suffix = LaunchConfiguration('kinematics_suffix', default='')
     ros2_control_plugin = LaunchConfiguration('ros2_control_plugin', default='uf_robot_hardware/UFRobotFakeSystemHardware')
 
+    teleop_device = LaunchConfiguration('teleop_device', default='gamepad')
+
     add_gripper = LaunchConfiguration('add_gripper', default=False)
     add_vacuum_gripper = LaunchConfiguration('add_vacuum_gripper', default=False)
     add_bio_gripper = LaunchConfiguration('add_bio_gripper', default=False)
@@ -228,12 +230,24 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[
                     servo_params,
                     {
-                        'dof': dof, 
+                        'dof': dof,
+                        'ros_queue_size': 10,
+                        'joystick_type': joystick_type,
+                    },
+                ]
+                # extra_arguments=[{'use_intra_process_comms': True}],
+            ) if teleop_device == 'gamepad' else ComposableNode(
+                package='xarm_moveit_servo',
+                plugin='xarm_moveit_servo::GelloToServoPub',
+                name='gello_to_servo_node',
+                parameters=[
+                    servo_params,
+                    {
+                        'dof': dof,
                         'ros_queue_size': 10,
                         'joystick_type': joystick_type,
                     },
                 ],
-                # extra_arguments=[{'use_intra_process_comms': True}],
             ),
             ComposableNode(
                 package='joy',

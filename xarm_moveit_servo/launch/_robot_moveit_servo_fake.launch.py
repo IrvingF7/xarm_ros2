@@ -7,19 +7,19 @@
 # Author: Vinman <vinman.wen@ufactory.cc> <vinman.cub@gmail.com>
 
 import os
+
 import yaml
 from ament_index_python import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import OpaqueFunction, IncludeLaunchDescription, RegisterEventHandler
+from launch.actions import IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.substitutions import FindPackageShare
-from launch_ros.actions import ComposableNodeContainer
+from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
-from launch_ros.actions import Node
-from launch.event_handlers import OnProcessExit
+from launch_ros.substitutions import FindPackageShare
 from uf_ros_lib.moveit_configs_builder import MoveItConfigsBuilder
-from uf_ros_lib.uf_robot_utils import load_yaml, generate_ros2_control_params_temp_file
+from uf_ros_lib.uf_robot_utils import generate_ros2_control_params_temp_file, load_yaml
 
 
 def launch_setup(context, *args, **kwargs):
@@ -27,7 +27,7 @@ def launch_setup(context, *args, **kwargs):
     report_type = LaunchConfiguration('report_type', default='normal')
     baud_checkset = LaunchConfiguration('baud_checkset', default=True)
     default_gripper_baud = LaunchConfiguration('default_gripper_baud', default=2000000)
-    
+
     dof = LaunchConfiguration('dof', default=7)
     robot_type = LaunchConfiguration('robot_type', default='xarm')
     prefix = LaunchConfiguration('prefix', default='')
@@ -43,6 +43,8 @@ def launch_setup(context, *args, **kwargs):
     mesh_suffix = LaunchConfiguration('mesh_suffix', default='stl')
     kinematics_suffix = LaunchConfiguration('kinematics_suffix', default='')
     ros2_control_plugin = LaunchConfiguration('ros2_control_plugin', default='uf_robot_hardware/UFRobotFakeSystemHardware')
+
+    teleop_device = LaunchConfiguration('teleop_device', default='gamepad')
 
     add_gripper = LaunchConfiguration('add_gripper', default=False)
     add_vacuum_gripper = LaunchConfiguration('add_vacuum_gripper', default=False)
@@ -61,7 +63,7 @@ def launch_setup(context, *args, **kwargs):
     geometry_mesh_origin_rpy = LaunchConfiguration('geometry_mesh_origin_rpy', default='"0 0 0"')
     geometry_mesh_tcp_xyz = LaunchConfiguration('geometry_mesh_tcp_xyz', default='"0 0 0"')
     geometry_mesh_tcp_rpy = LaunchConfiguration('geometry_mesh_tcp_rpy', default='"0 0 0"')
-    
+
     # 1: xbox360 wired
     # 2: xbox360 wireless
     # 3: spacemouse wireless
@@ -71,7 +73,7 @@ def launch_setup(context, *args, **kwargs):
     moveit_config_package_name = 'xarm_moveit_config'
     controllers_name = 'controllers' if ros2_control_plugin.perform(context) == 'uf_robot_hardware/UFRobotSystemHardware' else 'fake_controllers'
     xarm_type = '{}{}'.format(robot_type.perform(context), dof.perform(context) if robot_type.perform(context) in ('xarm', 'lite') else '')
-    
+
     ros2_control_params = generate_ros2_control_params_temp_file(
         os.path.join(get_package_share_directory('xarm_controller'), 'config', '{}{}_controllers.yaml'.format(robot_type.perform(context), dof.perform(context) if robot_type.perform(context) in ('xarm', 'lite') else '')),
         prefix=prefix.perform(context), 
@@ -121,7 +123,7 @@ def launch_setup(context, *args, **kwargs):
         geometry_mesh_origin_rpy=geometry_mesh_origin_rpy,
         geometry_mesh_tcp_xyz=geometry_mesh_tcp_xyz,
         geometry_mesh_tcp_rpy=geometry_mesh_tcp_rpy,
-        
+
     ).to_moveit_configs()
 
     robot_description_parameters = {}
@@ -203,62 +205,107 @@ def launch_setup(context, *args, **kwargs):
         ))
 
     # Launch as much as possible in components
-    container = ComposableNodeContainer(
-        name='xarm_moveit_servo_container',
-        namespace='/',
-        package='rclcpp_components',
-        executable='component_container',
-        composable_node_descriptions=[
-            ComposableNode(
-                package='robot_state_publisher',
-                plugin='robot_state_publisher::RobotStatePublisher',
-                name='robot_state_publisher',
-                parameters=[robot_description_parameters],
-            ),
-            ComposableNode(
-                package='tf2_ros',
-                plugin='tf2_ros::StaticTransformBroadcasterNode',
-                name='static_tf2_broadcaster',
-                parameters=[{'child_frame_id': 'link_base', 'frame_id': 'world'}],
-            ),
-            ComposableNode(
-                package='moveit_servo',
-                plugin='moveit_servo::ServoNode',
-                name='servo_server',
-                parameters=[
-                    servo_params,
-                    robot_description_parameters,
-                ],
-                # extra_arguments=[{'use_intra_process_comms': True}],
-            ),
-            ComposableNode(
+    if teleop_device.perform(context) == "gamepad":
+        container = ComposableNodeContainer(
+            name='xarm_moveit_servo_container',
+            namespace='/',
+            package='rclcpp_components',
+            executable='component_container',
+            composable_node_descriptions=[
+                ComposableNode(
+                    package='robot_state_publisher',
+                    plugin='robot_state_publisher::RobotStatePublisher',
+                    name='robot_state_publisher',
+                    parameters=[robot_description_parameters],
+                ),
+                ComposableNode(
+                    package='tf2_ros',
+                    plugin='tf2_ros::StaticTransformBroadcasterNode',
+                    name='static_tf2_broadcaster',
+                    parameters=[{'child_frame_id': 'link_base', 'frame_id': 'world'}],
+                ),
+                ComposableNode(
+                    package='moveit_servo',
+                    plugin='moveit_servo::ServoNode',
+                    name='servo_server',
+                    parameters=[
+                        servo_params,
+                        robot_description_parameters,
+                    ],
+                    # extra_arguments=[{'use_intra_process_comms': True}],
+                ),
+                ComposableNode(
+                    package='xarm_moveit_servo',
+                    plugin='xarm_moveit_servo::JoyToServoPub',
+                    name='joy_to_servo_node',
+                    parameters=[
+                        servo_params,
+                        {
+                            'dof': dof, 
+                            'ros_queue_size': 10,
+                            'joystick_type': joystick_type,
+                        },
+                    ],
+                    # extra_arguments=[{'use_intra_process_comms': True}],
+                ),
+                ComposableNode(
+                    package='joy',
+                    plugin='joy::Joy',
+                    name='joy_node',
+                    parameters=[
+                        # {'autorepeat_rate': 50.0},
+                    ],
+                    # extra_arguments=[{'use_intra_process_comms': True}],
+                ),
+            ],
+            output='screen',
+        )
+    else:  # teleop_device == "gello"
+                container = ComposableNodeContainer(
+            name='xarm_moveit_servo_container',
+            namespace='/',
+            package='rclcpp_components',
+            executable='component_container',
+            composable_node_descriptions=[
+                ComposableNode(
+                    package='robot_state_publisher',
+                    plugin='robot_state_publisher::RobotStatePublisher',
+                    name='robot_state_publisher',
+                    parameters=[robot_description_parameters],
+                ),
+                ComposableNode(
+                    package='tf2_ros',
+                    plugin='tf2_ros::StaticTransformBroadcasterNode',
+                    name='static_tf2_broadcaster',
+                    parameters=[{'child_frame_id': 'link_base', 'frame_id': 'world'}],
+                ),
+                ComposableNode(
+                    package='moveit_servo',
+                    plugin='moveit_servo::ServoNode',
+                    name='servo_server',
+                    parameters=[
+                        servo_params,
+                        robot_description_parameters,
+                    ],
+                    # extra_arguments=[{'use_intra_process_comms': True}],
+                ),
+                ComposableNode(
                 package='xarm_moveit_servo',
-                plugin='xarm_moveit_servo::JoyToServoPub',
-                name='joy_to_servo_node',
+                plugin='xarm_moveit_servo::GelloToServoPub',
+                name='gello_to_servo_node',
                 parameters=[
                     servo_params,
                     {
-                        'dof': dof, 
+                        'dof': dof,
                         'ros_queue_size': 10,
                         'joystick_type': joystick_type,
                     },
-                ],
-                # extra_arguments=[{'use_intra_process_comms': True}],
-            ),
-            ComposableNode(
-                package='joy',
-                plugin='joy::Joy',
-                name='joy_node',
-                parameters=[
-                    # {'autorepeat_rate': 50.0},
-                ],
-                # extra_arguments=[{'use_intra_process_comms': True}],
-            ),
-        ],
-        output='screen',
-    )
-
-    return [
+                    ],
+                ),
+            ],
+            output='screen',
+        )
+    return [  # noqa: RUF005
         RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=traj_controller_node,
