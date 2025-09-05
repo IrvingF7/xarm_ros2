@@ -1,9 +1,12 @@
-// src/abs_to_servo.cpp
+// src/gello_to_servo_vel.cpp
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
-#include <std_srvs/srv/trigger.hpp>
 #include <control_msgs/msg/joint_jog.hpp>
+#include <std_srvs/srv/trigger.hpp>
+
 #include <unordered_map>
+#include <vector>
+#include <string>
 #include <algorithm>
 #include <cmath>
 
@@ -16,143 +19,259 @@ namespace xarm_moveit_servo
 class GelloToServoPub : public rclcpp::Node
 {
 public:
-  GelloToServoPub(const rclcpp::NodeOptions& options)
-    : Node("gello_to_servo_publisher", options),
-      joint_names_({"joint1","joint2","joint3","joint4","joint5","joint6"})
+  explicit GelloToServoPub(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
+  : Node("gello_to_servo_vel", options)
   {
-    // --- parameters ---
-    declare_parameter<double>("rate_hz", 100.0);
-    declare_parameter<double>("deadband", 1e-4);            // rad
-    declare_parameter<double>("kp", 4.0);                   // rad/s per rad error
-    declare_parameter<double>("max_vel_per_joint", 1.0);    // rad/s cap per joint
-    declare_parameter<double>("target_timeout_s", 0.25);    // watchdog seconds
+    // --- Parameters (no sign/offset mapping here) ---
+    declare_parameter<std::vector<std::string>>("follower_joint_names",
+      {"joint1","joint2","joint3","joint4","joint5","joint6"});
 
-    rate_hz_            = get_parameter("rate_hz").as_double();
-    deadband_           = get_parameter("deadband").as_double();
-    kp_                 = get_parameter("kp").as_double();
-    max_vel_per_joint_  = get_parameter("max_vel_per_joint").as_double();
-    target_timeout_s_   = get_parameter("target_timeout_s").as_double();
+    declare_parameter<std::string>("leader_topic", "gello/joint_states");
+    declare_parameter<std::string>("follower_states_topic", "/joint_states");
+    declare_parameter<std::string>("servo_cmd_topic", "servo_server/delta_joint_cmds");
+    declare_parameter<std::string>("servo_start_srv", "/servo_server/start_servo");
 
-    // state
-    const size_t n = joint_names_.size();
-    target_.assign(n, 0.0);
-    current_.assign(n, 0.0);
+    declare_parameter<double>("rate_hz", 200.0);
+    declare_parameter<double>("deadband_rad", 1e-4);
+    declare_parameter<double>("vel_deadband", 1e-3);
+    declare_parameter<double>("kp", 4.0);
+    declare_parameter<double>("kd", 0.0);
+    declare_parameter<double>("k_ff", 1.0);
+
+    declare_parameter<double>("max_vel_per_joint", 1.0);
+    declare_parameter<double>("max_accel_per_joint", 10.0);
+    declare_parameter<double>("vel_filter_tau_s", 0.02);
+
+    declare_parameter<double>("leader_timeout_s", 0.25);
+    declare_parameter<double>("state_timeout_s", 0.25);
+
+    follower_joint_names_ = get_parameter("follower_joint_names").as_string_array();
+
+    leader_topic_          = get_parameter("leader_topic").as_string();
+    follower_states_topic_ = get_parameter("follower_states_topic").as_string();
+    servo_cmd_topic_       = get_parameter("servo_cmd_topic").as_string();
+    servo_start_srv_       = get_parameter("servo_start_srv").as_string();
+
+    rate_hz_        = get_parameter("rate_hz").as_double();
+    deadband_       = get_parameter("deadband_rad").as_double();
+    vel_deadband_   = get_parameter("vel_deadband").as_double();
+    kp_             = get_parameter("kp").as_double();
+    kd_             = get_parameter("kd").as_double();
+    k_ff_           = get_parameter("k_ff").as_double();
+    vmax_           = get_parameter("max_vel_per_joint").as_double();
+    amax_           = get_parameter("max_accel_per_joint").as_double();
+    tau_            = get_parameter("vel_filter_tau_s").as_double();
+    leader_timeout_ = get_parameter("leader_timeout_s").as_double();
+    state_timeout_  = get_parameter("state_timeout_s").as_double();
+
+    const size_t N = follower_joint_names_.size();
+    follower_pos_.assign(N, 0.0);
+    follower_vel_.assign(N, 0.0);
+    leader_pos_now_.assign(N, 0.0);
+    leader_pos_last_.assign(N, 0.0);
+    leader_vel_now_.assign(N, 0.0);
+    tmp_err_.assign(N, 0.0);
+    cmd_vel_raw_.assign(N, 0.0);
+    prev_cmd_vel_.assign(N, 0.0);
+    filt_cmd_vel_.assign(N, 0.0);
 
     // --- I/O ---
-    js_sub_ = create_subscription<JointState>(
-      "/joint_states", rclcpp::SensorDataQoS(),
-      [this](JointState::SharedPtr msg){ on_js(std::move(msg)); });
+    leader_sub_ = create_subscription<JointState>(
+      leader_topic_, rclcpp::SensorDataQoS(),
+      [this](JointState::SharedPtr msg){ on_leader(std::move(msg)); });
 
-    // NOTE: keeping your original target topic
-    tgt_sub_ = create_subscription<JointState>(
-      "gello/joint_states", 10,
-      [this](JointState::SharedPtr msg){ on_target(std::move(msg)); });
+    follower_sub_ = create_subscription<JointState>(
+      follower_states_topic_, rclcpp::SensorDataQoS(),
+      [this](JointState::SharedPtr msg){ on_follower(std::move(msg)); });
 
-    // Publish to your Servo JointJog input topic
-    pub_ = create_publisher<JointJog>("servo_server/delta_joint_cmds", 10);
+    pub_ = create_publisher<JointJog>(servo_cmd_topic_, 50);
 
-    // control loop timer
+    // Control loop
+    const double hz = std::max(20.0, rate_hz_);
+    loop_dt_ = 1.0 / hz;
     timer_ = create_wall_timer(
-      std::chrono::duration<double>(1.0 / std::max(1.0, rate_hz_)),
+      std::chrono::duration<double>(loop_dt_),
       [this](){ tick(); });
 
-    // Start Servo (as you had)
-    servo_start_client_ = this->create_client<std_srvs::srv::Trigger>("/servo_server/start_servo");
-    servo_start_client_->wait_for_service(std::chrono::seconds(1));
-    servo_start_client_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+    // Optionally start Servo
+    servo_start_ = create_client<std_srvs::srv::Trigger>(servo_start_srv_);
+    (void)servo_start_->wait_for_service(std::chrono::seconds(1));
+    if (servo_start_->service_is_ready())
+      servo_start_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
 
     RCLCPP_INFO(get_logger(),
-      "GelloToServoPub: velocity mode (kp=%.3f, max_vel=%.3f rad/s, deadband=%.1e, rate=%.1f Hz)",
-      kp_, max_vel_per_joint_, deadband_, rate_hz_);
+      "Gello→Servo velocity mode: N=%zu, rate=%.1f Hz, kp=%.3f, kd=%.3f, k_ff=%.3f, vmax=%.2f, amax=%.2f, tau=%.3f",
+      N, hz, kp_, kd_, k_ff_, vmax_, amax_, tau_);
   }
 
 private:
-  static inline double wrap(double d) { return std::atan2(std::sin(d), std::cos(d)); }
-  static inline double clamp(double x, double lo, double hi) {
-    return std::max(lo, std::min(hi, x));
-  }
+  // Helpers
+  static inline double wrap(double d){ return std::atan2(std::sin(d), std::cos(d)); }
+  static inline double clamp(double x,double lo,double hi){ return std::max(lo,std::min(hi,x)); }
 
-  void on_js(const JointState::SharedPtr& msg) {
-    // Map incoming joint_states into our fixed order
-    std::unordered_map<std::string,double> pos;
-    pos.reserve(msg->name.size());
-    for (size_t i=0;i<msg->name.size() && i<msg->position.size();++i)
-      pos.emplace(msg->name[i], msg->position[i]);
+  // Reorder into follower order. If leader msg has names, use them.
+  // If no names but positions length matches, assume same order.
+  bool reorder_into_follower(const JointState& js, std::vector<double>& out_pos) const
+  {
+    const size_t N = follower_joint_names_.size();
+    out_pos.resize(N);
 
-    bool ok = true;
-    for (size_t i=0;i<joint_names_.size();++i) {
-      auto it = pos.find(joint_names_[i]);
-      if (it == pos.end()) { ok = false; break; }
-      current_[i] = it->second;
-    }
-    have_state_ = ok;
-  }
-
-  void on_target(const JointState::SharedPtr& msg) {
-    // Accept either exact name order or bare positions with correct length
-    if (msg->position.size() == joint_names_.size()) {
-      if (msg->name.size() == joint_names_.size()) {
-        // If names supplied, reorder into our order
-        std::unordered_map<std::string,double> pos;
-        for (size_t i=0;i<msg->name.size();++i) pos[msg->name[i]] = msg->position[i];
-        for (size_t i=0;i<joint_names_.size();++i) target_[i] = pos[joint_names_[i]];
-      } else {
-        // Assume already in joint1..joint6 order
-        for (size_t i=0;i<joint_names_.size();++i) target_[i] = msg->position[i];
+    if (!js.name.empty()) {
+      std::unordered_map<std::string, size_t> idx;
+      idx.reserve(js.name.size());
+      for (size_t i=0;i<js.name.size();++i) idx[js.name[i]] = i;
+      for (size_t i=0;i<N;++i) {
+        auto it = idx.find(follower_joint_names_[i]);
+        if (it == idx.end() || it->second >= js.position.size()) return false;
+        out_pos[i] = js.position[it->second];
       }
-      have_target_ = true;
-      last_target_time_ = now();
+      return true;
+    } else if (js.position.size() == N) {
+      std::copy(js.position.begin(), js.position.end(), out_pos.begin());
+      return true;
     }
+    return false;
   }
 
-  void tick() {
-    if (!have_state_ || !have_target_) return;
+  void on_follower(const JointState::SharedPtr& msg)
+  {
+    last_follower_stamp_ = now();
 
-    // Watchdog: ignore stale targets (lets Servo stop smoothly)
-    if ((now() - last_target_time_).seconds() > target_timeout_s_) return;
+    // Positions (reordered) and velocities (if provided, also reorder by name; else zeros)
+    if (!reorder_into_follower(*msg, follower_pos_)) {
+      have_follower_ = false;
+      return;
+    }
 
-    // 1) error = shortest-angle(target - current)
-    std::vector<double> err(target_.size());
+    // Velocities
+    follower_vel_.assign(follower_vel_.size(), 0.0);
+    if (!msg->name.empty() && msg->velocity.size() == msg->name.size()) {
+      std::unordered_map<std::string, size_t> idx;
+      idx.reserve(msg->name.size());
+      for (size_t i=0;i<msg->name.size();++i) idx[msg->name[i]] = i;
+      for (size_t i=0;i<follower_joint_names_.size();++i) {
+        auto it = idx.find(follower_joint_names_[i]);
+        if (it != idx.end()) follower_vel_[i] = msg->velocity[it->second];
+      }
+    } else if (msg->name.empty() && msg->velocity.size() == follower_vel_.size()) {
+      std::copy(msg->velocity.begin(), msg->velocity.end(), follower_vel_.begin());
+    }
+
+    have_follower_ = true;
+  }
+
+void on_leader(const JointState::SharedPtr& msg)
+{
+  // Expect Gello already aligned; reorder into follower order
+  if (!reorder_into_follower(*msg, leader_pos_now_)) {
+    have_leader_ = false;
+    return;
+  }
+
+  // Get current ROS time from the node clock
+  const rclcpp::Time t_now = now();
+
+  double dt = 0.0;
+  if (have_leader_last_) {
+    // Only subtract when both stamps come from the same clock
+    dt = (t_now - last_leader_stamp_).seconds();
+  }
+  last_leader_stamp_ = t_now;
+
+  // Finite-difference leader velocity with unwrap
+  if (have_leader_last_ && dt > 1e-4 && dt < 1.0) {
+    for (size_t i=0;i<leader_pos_now_.size();++i) {
+      const double d = wrap(leader_pos_now_[i] - leader_pos_last_[i]);
+      leader_vel_now_[i] = d / dt;
+    }
+  } else {
+    std::fill(leader_vel_now_.begin(), leader_vel_now_.end(), 0.0);
+  }
+
+  leader_pos_last_ = leader_pos_now_;
+  have_leader_ = true;
+  have_leader_last_ = true;
+}
+
+  void tick()
+  {
+    if (!have_follower_ || !have_leader_) return;
+
+    // Watchdogs
+    if ((now() - last_leader_stamp_).seconds()   > leader_timeout_) return;
+    if ((now() - last_follower_stamp_).seconds() > state_timeout_)  return;
+
+    const size_t N = follower_joint_names_.size();
+
+    // 1) error
     bool all_small = true;
-    for (size_t i=0;i<err.size();++i) {
-      double d = wrap(target_[i] - current_[i]);
-      if (std::abs(d) < deadband_) d = 0.0;
-      else all_small = false;
-      err[i] = d;
-    }
-    if (all_small) return;
-
-    // 2) P-control -> per-joint velocities, clamped
-    std::vector<double> vel(err.size());
-    for (size_t i=0;i<vel.size();++i) {
-      vel[i] = clamp(kp_ * err[i], -max_vel_per_joint_, +max_vel_per_joint_);
+    for (size_t i=0;i<N;++i) {
+      double e = wrap(leader_pos_now_[i] - follower_pos_[i]);
+      if (std::fabs(e) < deadband_) e = 0.0; else all_small = false;
+      tmp_err_[i] = e;
     }
 
-    // 3) Publish JointJog with VELOCITIES ONLY
-    JointJog msg;
-    msg.header.stamp = now();
-    msg.joint_names  = joint_names_;
-    msg.velocities   = vel;      // velocity mode
-    msg.displacements.clear();   // ensure EMPTY in velocity mode
-    pub_->publish(msg);
+    // 2) velocity command = FF + P - D
+    for (size_t i=0;i<N;++i) {
+      const double vff = (std::fabs(leader_vel_now_[i]) < vel_deadband_) ? 0.0 : (k_ff_ * leader_vel_now_[i]);
+      const double vp  = kp_ * tmp_err_[i];
+      const double vd  = -kd_ * follower_vel_[i];
+      cmd_vel_raw_[i]  = vff + vp + vd;
+    }
+
+    // 3) hard vel cap
+    for (double& v : cmd_vel_raw_) v = clamp(v, -vmax_, +vmax_);
+
+    // 4) slew-rate (accel) limit
+    for (size_t i=0;i<N;++i) {
+      const double dv = cmd_vel_raw_[i] - prev_cmd_vel_[i];
+      const double dv_max = amax_ * loop_dt_;
+      prev_cmd_vel_[i] += clamp(dv, -dv_max, +dv_max);
+    }
+
+    // 5) EMA smoothing
+    const double alpha = (tau_ <= 1e-6) ? 1.0 : (loop_dt_ / (tau_ + loop_dt_));
+    for (size_t i=0;i<N;++i) {
+      filt_cmd_vel_[i] += alpha * (prev_cmd_vel_[i] - filt_cmd_vel_[i]);
+    }
+
+    // 6) skip spam if tiny
+    bool all_zeroish = true;
+    for (double v : filt_cmd_vel_) if (std::fabs(v) > 1e-6) { all_zeroish = false; break; }
+    if (all_small && all_zeroish) return;
+
+    // 7) publish velocities only
+    JointJog jj;
+    jj.header.stamp = now();
+    jj.joint_names  = follower_joint_names_;
+    jj.velocities   = filt_cmd_vel_;
+    jj.displacements.clear();   // IMPORTANT: empty in velocity mode
+    pub_->publish(jj);
   }
 
-  // Params/state
-  std::vector<std::string> joint_names_;
-  std::vector<double> target_, current_;
-  bool have_state_{false}, have_target_{false};
-  rclcpp::Time last_target_time_;
-  double rate_hz_{100.0}, deadband_{1e-4};
-  double kp_{4.0}, max_vel_per_joint_{1.0}, target_timeout_s_{0.25};
+  // Params
+  std::vector<std::string> follower_joint_names_;
+  std::string leader_topic_, follower_states_topic_, servo_cmd_topic_, servo_start_srv_;
+  double rate_hz_{200.0}, loop_dt_{0.005};
+  double deadband_{1e-4}, vel_deadband_{1e-3};
+  double kp_{4.0}, kd_{0.0}, k_ff_{1.0};
+  double vmax_{1.0}, amax_{10.0}, tau_{0.02};
+  double leader_timeout_{0.25}, state_timeout_{0.25};
+
+  // State
+  std::vector<double> follower_pos_, follower_vel_;
+  std::vector<double> leader_pos_now_, leader_pos_last_, leader_vel_now_;
+  std::vector<double> tmp_err_, cmd_vel_raw_, prev_cmd_vel_, filt_cmd_vel_;
+  rclcpp::Time last_leader_stamp_, last_leader_stamp_prev_, last_follower_stamp_;
+  bool have_follower_{false}, have_leader_{false}, have_leader_last_{false};
 
   // ROS
-  rclcpp::Subscription<JointState>::SharedPtr js_sub_, tgt_sub_;
+  rclcpp::Subscription<JointState>::SharedPtr leader_sub_, follower_sub_;
   rclcpp::Publisher<JointJog>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
-  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr servo_start_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr servo_start_;
 };
-}  // namespace xarm_moveit_servo
+} // namespace xarm_moveit_servo
 
-// Register the component with class_loader
 #include <rclcpp_components/register_node_macro.hpp>
 RCLCPP_COMPONENTS_REGISTER_NODE(xarm_moveit_servo::GelloToServoPub)
