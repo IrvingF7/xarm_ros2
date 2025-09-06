@@ -11,8 +11,8 @@ import os
 import yaml
 from ament_index_python import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler
-from launch.event_handlers import OnProcessExit
+from launch.actions import IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler, TimerAction
+from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer, Node
@@ -241,7 +241,7 @@ def launch_setup(context, *args, **kwargs):
                     parameters=[
                         servo_params,
                         {
-                            'dof': dof, 
+                            'dof': dof,
                             'ros_queue_size': 10,
                             'joystick_type': joystick_type,
                         },
@@ -261,7 +261,7 @@ def launch_setup(context, *args, **kwargs):
             output='screen',
         )
     else:  # teleop_device == "gello"
-                container = ComposableNodeContainer(
+        container = ComposableNodeContainer(
             name='xarm_moveit_servo_container',
             namespace='/',
             package='rclcpp_components',
@@ -305,6 +305,45 @@ def launch_setup(context, *args, **kwargs):
             ],
             output='screen',
         )
+
+    if add_gripper.perform(context) in ('True', 'true') and robot_type.perform(context) != 'lite':
+        move_group_node = Node(
+            package='moveit_ros_move_group',
+            executable='move_group',
+            output='screen',
+            parameters=[
+                moveit_config.to_dict(),   # URDF + SRDF + kinematics + limits + pipelines
+                # ros2_control_params,              # ← gripper-only controllers
+                # {'allow_trajectory_execution': True},  # keep execution enabled (we want to command the gripper)
+            ],
+        )
+        gripper_toggler_node = Node(
+            package='xarm_moveit_servo',
+            executable='xarm_gripper_toggler',
+            name='xarm_gripper_toggler',
+            output='screen',
+            parameters=[robot_description_parameters],
+        )
+        start_toggler_after_move_group = RegisterEventHandler(
+            event_handler=OnProcessStart(
+                target_action=move_group_node,
+                on_start=[TimerAction(period=2.0, actions=[gripper_toggler_node])],
+            )
+        )
+
+        return [  # noqa: RUF005
+            RegisterEventHandler(
+                event_handler=OnProcessExit(
+                    target_action=traj_controller_node,
+                    on_exit=container,
+                )
+            ),
+            rviz_node,
+            joint_state_broadcaster,
+            ros2_control_launch,
+            traj_controller_node,
+        ] + controller_nodes + [move_group_node, start_toggler_after_move_group]
+
     return [  # noqa: RUF005
         RegisterEventHandler(
             event_handler=OnProcessExit(

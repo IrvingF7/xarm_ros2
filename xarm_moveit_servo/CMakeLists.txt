@@ -29,6 +29,8 @@ find_package(control_msgs REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
+find_package(moveit REQUIRED)
+find_package(moveit_ros_planning_interface REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -50,7 +52,9 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   control_msgs
   moveit_msgs
   geometry_msgs
+  moveit
   moveit_ros_planning
+  moveit_ros_planning_interface
 )
 
 include_directories(
@@ -74,11 +78,16 @@ add_executable(xarm_keyboard_input
 )
 ament_target_dependencies(xarm_keyboard_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
+add_executable(xarm_gripper_toggler
+  src/GelloToGripperPub_xArm6.cpp
+)
+ament_target_dependencies(xarm_gripper_toggler ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
 install(TARGETS
   xarm_joystick_input
   xarm_gello_input
   xarm_keyboard_input
+  xarm_gripper_toggler
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
