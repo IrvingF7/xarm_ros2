@@ -302,6 +302,21 @@ def launch_setup(context, *args, **kwargs):
                     },
                     ],
                 ),
+                ComposableNode(
+                package="xarm_moveit_servo",
+                plugin="xarm_moveit_servo::EEPublisher",
+                name="ee_publisher",
+                parameters=[
+                    moveit_config.to_dict(),  # robot_description + semantic
+                    {
+                        "planning_group": "xarm6",
+                        "tcp_link": "link_tcp",
+                        "eef_link": "link_eef",
+                        "base_frame": "base_link",  # match Servo planning frame
+                        "twist_frame": "spatial"    # or "body"
+                    }
+                    ],
+                )
             ],
             output='screen',
         )

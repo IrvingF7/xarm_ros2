@@ -31,6 +31,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
 find_package(moveit REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -55,6 +56,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   moveit
   moveit_ros_planning
   moveit_ros_planning_interface
+  Eigen3
 )
 
 include_directories(
@@ -73,6 +75,11 @@ add_library(xarm_gello_input SHARED src/GelloToServoPub_xArm6.cpp)
 ament_target_dependencies(xarm_gello_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 rclcpp_components_register_nodes(xarm_gello_input "xarm_moveit_servo::GelloToServoPub")
 
+add_library(ee_publisher SHARED src/EEPublisher.cpp)
+ament_target_dependencies(ee_publisher ${THIS_PACKAGE_INCLUDE_DEPENDS})
+rclcpp_components_register_nodes(ee_publisher "xarm_moveit_servo::EEPublisher")
+
+
 add_executable(xarm_keyboard_input
   src/xarm_keyboard_input.cpp
 )
@@ -88,6 +95,7 @@ install(TARGETS
   xarm_gello_input
   xarm_keyboard_input
   xarm_gripper_toggler
+  ee_publisher
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
