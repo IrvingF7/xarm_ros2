@@ -312,7 +312,7 @@ def launch_setup(context, *args, **kwargs):
                         "planning_group": "xarm6",
                         "tcp_link": "link_tcp",
                         "eef_link": "link_eef",
-                        "base_frame": "base_link",  # match Servo planning frame
+                        "base_frame": "link_base",  # match Servo planning frame
                         "twist_frame": "spatial"    # or "body"
                     }
                     ],

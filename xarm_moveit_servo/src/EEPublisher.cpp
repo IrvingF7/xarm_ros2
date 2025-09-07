@@ -37,38 +37,52 @@ public:
     get_parameter("base_frame", base_frame_);
     get_parameter("twist_frame", twist_frame_);
 
-    // Load model from existing robot_description
-    robot_model_loader::RobotModelLoader loader(shared_from_this(), "robot_description");
-    model_ = loader.getModel();
-    if (!model_) throw std::runtime_error("Failed to load RobotModel from 'robot_description'.");
-    state_ = std::make_shared<moveit::core::RobotState>(model_);
-    jmg_   = model_->getJointModelGroup(group_);
-    if (!jmg_) throw std::runtime_error("Bad planning_group: " + group_);
-
-    model_frame_ = model_->getModelFrame();
-    if (base_frame_.empty()) base_frame_ = model_frame_;
-
-    // Resolve link models
-    add_link_if_ok("tcp", tcp_link_);
-    add_link_if_ok("eef", eef_link_);
-    if (link_models_.empty()) throw std::runtime_error("Neither tcp_link nor eef_link found in model.");
-
-    // Publishers per target
+    // Publishers per target (link_models_ not populated yet; real creation happens in add_link_if_ok)
     for (const auto& kv : link_models_) {
       const auto& key = kv.first; // "tcp" or "eef"
       pose_pub_[key]  = create_publisher<geometry_msgs::msg::PoseStamped>(key + std::string("/pose"), 10);
       twist_pub_[key] = create_publisher<geometry_msgs::msg::TwistStamped>(key + std::string("/twist"), 10);
     }
 
-    // Cache group var names ordering
-    group_vars_ = jmg_->getVariableNames();
-
     sub_js_ = create_subscription<sensor_msgs::msg::JointState>(
       "joint_states", rclcpp::SensorDataQoS(),
       std::bind(&EEPublisher::on_js, this, std::placeholders::_1));
+
+    // IMPORTANT: don’t call shared_from_this() here. Defer init:
+    init_timer_ = create_wall_timer(std::chrono::milliseconds(0),
+      std::bind(&EEPublisher::late_init, this));
   }
 
 private:
+  void late_init() {
+    if (initialized_) return;
+    // Safe now: the component is owned by a shared_ptr
+    robot_model_loader_ =
+      std::make_shared<robot_model_loader::RobotModelLoader>(shared_from_this(), "robot_description");
+    model_ = robot_model_loader_->getModel();
+    if (!model_) { RCLCPP_ERROR(get_logger(), "Failed to load robot model"); return; }
+
+    model_frame_ = model_->getModelFrame();
+    jmg_ = model_->getJointModelGroup(group_);
+    if (!jmg_) { RCLCPP_ERROR(get_logger(), "Bad planning_group: %s", group_.c_str()); return; }
+
+    // Create a robot state
+    state_ = std::make_shared<moveit::core::RobotState>(model_);
+    state_->setToDefaultValues();
+    state_->update();
+
+    // Resolve links (tcp/eef), cache group vars, etc…
+    // Resolve link models
+    add_link_if_ok("tcp", tcp_link_);
+    add_link_if_ok("eef", eef_link_);
+    if (link_models_.empty()) throw std::runtime_error("Neither tcp_link nor eef_link found in model.");
+
+    // Cache group var names ordering
+    group_vars_ = jmg_->getVariableNames();
+
+    initialized_ = true;
+    init_timer_->cancel();  // one-shot
+  }
   void add_link_if_ok(const std::string& key, const std::string& link_name) {
     if (link_name.empty()) return;
     const auto* lm = model_->getLinkModel(link_name);
@@ -78,9 +92,18 @@ private:
     }
     link_models_[key] = lm;
     link_names_[key]  = link_name;
+
+    // Create publishers for this key if not already created
+    if (!pose_pub_.count(key) || !pose_pub_[key]) {
+      pose_pub_[key] = create_publisher<geometry_msgs::msg::PoseStamped>(key + std::string("/pose"), 10);
+    }
+    if (!twist_pub_.count(key) || !twist_pub_[key]) {
+      twist_pub_[key] = create_publisher<geometry_msgs::msg::TwistStamped>(key + std::string("/twist"), 10);
+    }
   }
 
   void on_js(const sensor_msgs::msg::JointState::SharedPtr js) {
+    if (!initialized_ || !state_) return;
     if (js->name.size() != js->position.size()) return;
 
     // Update state & transforms
@@ -135,7 +158,8 @@ private:
       Eigen::Quaterniond q(T_B_L.rotation());
       ps.pose.orientation.w = q.w(); ps.pose.orientation.x = q.x();
       ps.pose.orientation.y = q.y(); ps.pose.orientation.z = q.z();
-      pose_pub_[key]->publish(ps);
+      auto pp = pose_pub_.find(key);
+      if (pp != pose_pub_.end() && pp->second) pp->second->publish(ps);
 
       // Twist via J(q)*dq (spatial, model frame) → convert to desired frame
       Eigen::MatrixXd J; state_->getJacobian(jmg_, link, Eigen::Vector3d::Zero(), J); // 6xN, spatial in model frame
@@ -152,13 +176,19 @@ private:
       tw.header = ps.header;
       tw.twist.linear.x = V(0); tw.twist.linear.y = V(1); tw.twist.linear.z = V(2);
       tw.twist.angular.x = V(3); tw.twist.angular.y = V(4); tw.twist.angular.z = V(5);
-      twist_pub_[key]->publish(tw);
+      auto tp = twist_pub_.find(key);
+      if (tp != twist_pub_.end() && tp->second) tp->second->publish(tw);
     }
 
     if (!have_vel) { prev_pos_ = name_to_pos_; prev_stamp_ = js->header.stamp; }
   }
 
   // Params / model
+  bool initialized_{false};
+  rclcpp::TimerBase::SharedPtr init_timer_;
+  std::shared_ptr<robot_model_loader::RobotModelLoader> robot_model_loader_;
+
+
   std::string group_, tcp_link_, eef_link_, base_frame_, twist_frame_, model_frame_;
   moveit::core::RobotModelPtr model_;
   moveit::core::RobotStatePtr state_;
@@ -174,7 +204,7 @@ private:
 
   // FD helpers
   std::unordered_map<std::string,double> name_to_pos_, name_to_vel_, prev_pos_;
-  rclcpp::Time prev_stamp_{0,0,get_clock()->get_clock_type()};
+  rclcpp::Time prev_stamp_;
 };
 
 } // namespace xarm_moveit_servo
