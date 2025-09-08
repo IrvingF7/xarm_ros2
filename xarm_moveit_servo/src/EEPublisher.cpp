@@ -95,10 +95,10 @@ private:
 
     // Create publishers for this key if not already created
     if (!pose_pub_.count(key) || !pose_pub_[key]) {
-      pose_pub_[key] = create_publisher<geometry_msgs::msg::PoseStamped>(key + std::string("/pose"), 10);
+      pose_pub_[key] = create_publisher<geometry_msgs::msg::PoseStamped>(std::string("/xarm/") + key + std::string("_pose"), 10);
     }
     if (!twist_pub_.count(key) || !twist_pub_[key]) {
-      twist_pub_[key] = create_publisher<geometry_msgs::msg::TwistStamped>(key + std::string("/twist"), 10);
+      twist_pub_[key] = create_publisher<geometry_msgs::msg::TwistStamped>(std::string("/xarm/") + key + std::string("_twist"), 10);
     }
   }
 
