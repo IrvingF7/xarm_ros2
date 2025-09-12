@@ -214,7 +214,13 @@ def launch_setup(context, *args, **kwargs):
                     package='robot_state_publisher',
                     plugin='robot_state_publisher::RobotStatePublisher',
                     name='robot_state_publisher',
-                    parameters=[robot_description_parameters],
+                    parameters=[
+                        {
+                            'robot_description': robot_description_parameters,
+                            'publish_frequency': 50.0,
+                        }
+                    ],
+                    extra_arguments=[{'use_intra_process_comms': True}],
                 ),
                 ComposableNode(
                     package='tf2_ros',
@@ -311,7 +317,8 @@ def launch_setup(context, *args, **kwargs):
                         "tcp_link": "link_tcp",
                         "eef_link": "link_eef",
                         "base_frame": "link_base",  # match Servo planning frame
-                        "twist_frame": "spatial"    # or "body"
+                        "twist_frame": "spatial",    # or "body"
+                        "use_fake_hardware": 'false',
                     }
                     ],
                 )

@@ -313,7 +313,8 @@ def launch_setup(context, *args, **kwargs):
                         "tcp_link": "link_tcp",
                         "eef_link": "link_eef",
                         "base_frame": "link_base",  # match Servo planning frame
-                        "twist_frame": "spatial"    # or "body"
+                        "twist_frame": "spatial",    # or "body"
+                        "use_fake_hardware": 'true',
                     }
                     ],
                 )

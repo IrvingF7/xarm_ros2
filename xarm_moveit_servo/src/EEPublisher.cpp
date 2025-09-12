@@ -30,12 +30,14 @@ public:
     declare_parameter<std::string>("eef_link", "link_eef");
     declare_parameter<std::string>("base_frame", "");
     declare_parameter<std::string>("twist_frame", "spatial"); // "spatial" or "body"
-
+    declare_parameter<std::string>("use_fake_hardware", "false");
+  
     get_parameter("planning_group", group_);
     get_parameter("tcp_link", tcp_link_);
     get_parameter("eef_link", eef_link_);
     get_parameter("base_frame", base_frame_);
     get_parameter("twist_frame", twist_frame_);
+    get_parameter("use_fake_hardware", use_fake_hardware_);
 
     // Publishers per target (link_models_ not populated yet; real creation happens in add_link_if_ok)
     for (const auto& kv : link_models_) {
@@ -44,8 +46,15 @@ public:
       twist_pub_[key] = create_publisher<geometry_msgs::msg::TwistStamped>(key + std::string("/twist"), 10);
     }
 
+    if (use_fake_hardware_ == "true") {
+      RCLCPP_INFO(get_logger(), "Using fake hardware; EE calculated based on /joint_states.");
+      joint_state_topic_ = "joint_states";
+    } else {
+      RCLCPP_INFO(get_logger(), "Using real hardware; EE calculated based on /xarm/joint_states.");
+      joint_state_topic_ = "xarm/joint_states";
+    }
     sub_js_ = create_subscription<sensor_msgs::msg::JointState>(
-      "joint_states", rclcpp::SensorDataQoS(),
+      joint_state_topic_, rclcpp::SensorDataQoS(),
       std::bind(&EEPublisher::on_js, this, std::placeholders::_1));
 
     // IMPORTANT: don’t call shared_from_this() here. Defer init:
@@ -189,7 +198,7 @@ private:
   std::shared_ptr<robot_model_loader::RobotModelLoader> robot_model_loader_;
 
 
-  std::string group_, tcp_link_, eef_link_, base_frame_, twist_frame_, model_frame_;
+  std::string group_, tcp_link_, eef_link_, base_frame_, twist_frame_, model_frame_, use_fake_hardware_, joint_state_topic_;
   moveit::core::RobotModelPtr model_;
   moveit::core::RobotStatePtr state_;
   const moveit::core::JointModelGroup* jmg_{nullptr};
