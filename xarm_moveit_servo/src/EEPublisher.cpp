@@ -45,6 +45,11 @@ public:
       pose_pub_[key]  = create_publisher<geometry_msgs::msg::PoseStamped>(key + std::string("/pose"), 10);
       twist_pub_[key] = create_publisher<geometry_msgs::msg::TwistStamped>(key + std::string("/twist"), 10);
     }
+    
+    // Create a dedicated callback group so a MT executor can run us concurrently
+    cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+    rclcpp::SubscriptionOptions sub_opts;
+    sub_opts.callback_group = cb_group_;
 
     if (use_fake_hardware_ == "true") {
       RCLCPP_INFO(get_logger(), "Using fake hardware; EE calculated based on /joint_states.");
@@ -55,7 +60,7 @@ public:
     }
     sub_js_ = create_subscription<sensor_msgs::msg::JointState>(
       joint_state_topic_, rclcpp::SensorDataQoS(),
-      std::bind(&EEPublisher::on_js, this, std::placeholders::_1));
+      std::bind(&EEPublisher::on_js, this, std::placeholders::_1), sub_opts);
 
     // IMPORTANT: don’t call shared_from_this() here. Defer init:
     init_timer_ = create_wall_timer(std::chrono::milliseconds(0),
@@ -88,6 +93,12 @@ private:
 
     // Cache group var names ordering
     group_vars_ = jmg_->getVariableNames();
+    dof_ = jmg_->getVariableCount();
+    // Pre-allocations
+    dq_.resize(dof_); dq_.setZero();
+    q_prev_.resize(dof_); q_prev_.setZero();
+    J_.resize(6, dof_);   // preallocate once
+    js_index_.resize(dof_, -1);
 
     initialized_ = true;
     init_timer_->cancel();  // one-shot
@@ -115,25 +126,50 @@ private:
     if (!initialized_ || !state_) return;
     if (js->name.size() != js->position.size()) return;
 
-    // Update state & transforms
-    state_->setVariablePositions(js->name, js->position);
-    state_->update();
+    // Build name->index once to avoid per-call unordered_map overhead
+    if (!idx_ready_) {
+      std::unordered_map<std::string,int> name2i; name2i.reserve(js->name.size());
+      for (int i=0; i<(int)js->name.size(); ++i) name2i[js->name[i]] = i;
+      for (size_t k=0; k<group_vars_.size(); ++k) {
+        auto it = name2i.find(group_vars_[k]);
+        if (it == name2i.end()) {
+          RCLCPP_WARN(get_logger(), "Joint %s not in joint_states; skipping frame.", group_vars_[k].c_str());
+          return;
+        }
+        js_index_[k] = it->second;
+      }
+      idx_ready_ = true;
+    }
 
-    // Build dq (from driver or FD fallback)
-    Eigen::VectorXd dq(group_vars_.size()); dq.setZero();
+    // Extract q in group order
+    tmp_q_.resize(dof_);
+    for (size_t k=0; k<group_vars_.size(); ++k)
+      tmp_q_[k] = js->position[js_index_[k]];
+
+    state_->setJointGroupPositions(jmg_, tmp_q_);
+    state_->update();  // (you may try updateLinkTransforms() only)
+
+    // dq
+    dq_.setZero();
     bool have_vel = (js->velocity.size() == js->name.size());
-    name_to_pos_.clear(); for (size_t i=0;i<js->name.size();++i) name_to_pos_[js->name[i]] = js->position[i];
-    if (have_vel) { name_to_vel_.clear(); for (size_t i=0;i<js->name.size();++i) name_to_vel_[js->name[i]] = js->velocity[i]; }
     double dt = 0.0;
     if (!have_vel) {
-      if (!prev_stamp_.nanoseconds()) { prev_pos_ = name_to_pos_; prev_stamp_ = js->header.stamp; return; }
-      dt = (rclcpp::Time(js->header.stamp) - prev_stamp_).seconds(); if (dt <= 0.0) return;
+      if (!prev_stamp_.nanoseconds()) { q_prev_ = Eigen::Map<const Eigen::VectorXd>(tmp_q_.data(), dof_); prev_stamp_ = js->header.stamp; return; }
+      dt = (rclcpp::Time(js->header.stamp) - prev_stamp_).seconds();
+      if (dt <= 0.0) return;
+      Eigen::VectorXd q = Eigen::Map<const Eigen::VectorXd>(tmp_q_.data(), dof_);
+      dq_ = (q - q_prev_) / dt;
+    } else {
+      for (size_t k=0; k<group_vars_.size(); ++k)
+        dq_[k] = js->velocity[js_index_[k]];
     }
-    for (size_t i=0;i<group_vars_.size();++i){
-      const auto& v = group_vars_[i];
-      auto itp = name_to_pos_.find(v); if (itp == name_to_pos_.end()) continue;
-      dq[i] = have_vel ? name_to_vel_[v] : (itp->second - prev_pos_[v]) / dt;
-    }
+
+    // Optional short-circuit if nothing is listening
+    size_t subs = 0;
+    for (auto& kv : pose_pub_)  if (kv.second) subs += kv.second->get_subscription_count();
+    for (auto& kv : twist_pub_) if (kv.second) subs += kv.second->get_subscription_count();
+    if (subs == 0) { if (!have_vel){ q_prev_ = Eigen::Map<const Eigen::VectorXd>(tmp_q_.data(), dof_); prev_stamp_ = js->header.stamp; } return; }
+
 
     // Base transform (model → base)
     Eigen::Isometry3d T_W_B = Eigen::Isometry3d::Identity();
@@ -170,13 +206,11 @@ private:
       auto pp = pose_pub_.find(key);
       if (pp != pose_pub_.end() && pp->second) pp->second->publish(ps);
 
-      // Twist via J(q)*dq (spatial, model frame) → convert to desired frame
-      Eigen::MatrixXd J; state_->getJacobian(jmg_, link, Eigen::Vector3d::Zero(), J); // 6xN, spatial in model frame
-      Eigen::VectorXd V = J * dq;                            // in model frame
-      if (base_frame_ != model_frame_) V = adjoint(T_B_W) * V; // to base (spatial)
-
+      // Jacobian: reuse pre-allocated J_
+      state_->getJacobian(jmg_, link, Eigen::Vector3d::Zero(), J_ /*, use_quaternion=false*/);
+      Eigen::VectorXd V = J_ * dq_;
+      if (base_frame_ != model_frame_) V = adjoint(T_B_W) * V;
       if (twist_frame_ == "body") {
-        // Convert spatial (at L, expressed in base) → body (expressed in L)
         Eigen::Isometry3d T_L_B = T_B_L.inverse();
         V = adjoint(T_L_B) * V;
       }
@@ -189,7 +223,7 @@ private:
       if (tp != twist_pub_.end() && tp->second) tp->second->publish(tw);
     }
 
-    if (!have_vel) { prev_pos_ = name_to_pos_; prev_stamp_ = js->header.stamp; }
+    if (!have_vel) { q_prev_ = Eigen::Map<const Eigen::VectorXd>(tmp_q_.data(), dof_); prev_stamp_ = js->header.stamp; }
   }
 
   // Params / model
@@ -197,6 +231,13 @@ private:
   rclcpp::TimerBase::SharedPtr init_timer_;
   std::shared_ptr<robot_model_loader::RobotModelLoader> robot_model_loader_;
 
+  rclcpp::CallbackGroup::SharedPtr cb_group_;
+  size_t dof_{0};
+  std::vector<int> js_index_;
+  bool idx_ready_{false};
+  std::vector<double> tmp_q_;
+  Eigen::VectorXd dq_, q_prev_;
+  Eigen::MatrixXd J_;
 
   std::string group_, tcp_link_, eef_link_, base_frame_, twist_frame_, model_frame_, use_fake_hardware_, joint_state_topic_;
   moveit::core::RobotModelPtr model_;

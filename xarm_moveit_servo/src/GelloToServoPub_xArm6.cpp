@@ -39,8 +39,8 @@ public:
     declare_parameter<double>("k_ff", 1.0);
 
     declare_parameter<double>("max_vel_per_joint", 1.0);
-    declare_parameter<double>("max_accel_per_joint", 10.0);
-    declare_parameter<double>("vel_filter_tau_s", 0.02);
+    declare_parameter<double>("max_accel_per_joint", 50.0);
+    declare_parameter<double>("vel_filter_tau_s", 0.005);
 
     declare_parameter<double>("leader_timeout_s", 0.25);
     declare_parameter<double>("state_timeout_s", 0.25);
@@ -83,8 +83,11 @@ public:
     follower_sub_ = create_subscription<JointState>(
       follower_states_topic_, rclcpp::SensorDataQoS(),
       [this](JointState::SharedPtr msg){ on_follower(std::move(msg)); });
-
-    pub_ = create_publisher<JointJog>(servo_cmd_topic_, 50);
+    
+    rclcpp::QoS qos_servo_pub(1);
+    qos_servo_pub.best_effort();     // Drop if late
+    qos_servo_pub.durability_volatile();
+    pub_ = create_publisher<JointJog>(servo_cmd_topic_, qos_servo_pub);
 
     // Control loop
     const double hz = std::max(20.0, rate_hz_);

@@ -299,11 +299,6 @@ def launch_setup(context, *args, **kwargs):
                 name='gello_to_servo_node',
                 parameters=[
                     servo_params,
-                    {
-                        'dof': dof,
-                        'ros_queue_size': 10,
-                        'joystick_type': joystick_type,
-                    },
                     ],
                 ),
                 ComposableNode(
@@ -318,7 +313,7 @@ def launch_setup(context, *args, **kwargs):
                         "eef_link": "link_eef",
                         "base_frame": "link_base",  # match Servo planning frame
                         "twist_frame": "spatial",    # or "body"
-                        "use_fake_hardware": 'false',
+                        "use_fake_hardware": "false",
                     }
                     ],
                 )
