@@ -3,7 +3,7 @@
 #include <optional>
 
 #include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/float32.hpp>
+#include <dag_interfaces/msg/float32_stamped.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 
 int main(int argc, char * argv[])
@@ -34,9 +34,9 @@ int main(int argc, char * argv[])
     std::optional<bool> last_is_closed = std::nullopt;
 
     // Subscription callback to command gripper based on threshold
-    auto sub = node->create_subscription<std_msgs::msg::Float32>(
+    auto sub = node->create_subscription<dag_interfaces::msg::Float32Stamped>(
         "gello/gripper_width_percent", 10,
-        [&](const std_msgs::msg::Float32 & msg)
+        [&](const dag_interfaces::msg::Float32Stamped & msg)
         {
             const float v = msg.data;
             // Below threshold -> close, above threshold -> open.
