@@ -10,7 +10,7 @@ ufactory_driver:
       joint_names: ['drive_joint', 'left_finger_joint', 'left_inner_knuckle_joint', 'right_outer_knuckle_joint', 'right_finger_joint', 'right_inner_knuckle_joint']
       speed: 2000
       max_pos: 850
-      frequency: 10
+      frequency: 100
       threshold: 3
       threshold_times: 10
     services:
