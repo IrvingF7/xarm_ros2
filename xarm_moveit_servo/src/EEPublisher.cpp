@@ -1,4 +1,4 @@
-// src/multi_ee_pose_twist_component.cpp
+// publish end-effector pose and twist based on joint_states. In meter and rad
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
