@@ -3,6 +3,7 @@
 #include <optional>
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/qos.hpp>
 #include <dag_interfaces/msg/float32_stamped.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 
@@ -33,9 +34,12 @@ int main(int argc, char * argv[])
     // true = closed, false = open, std::nullopt = unknown/not set yet
     std::optional<bool> last_is_closed = std::nullopt;
 
+    // QoS to match the publisher (KEEP_LAST(1), BEST_EFFORT, VOLATILE)
+    auto teleop_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();
+
     // Subscription callback to command gripper based on threshold
     auto sub = node->create_subscription<dag_interfaces::msg::Float32Stamped>(
-        "gello/gripper_width_percent", 10,
+        "gello/gripper_width_percent", teleop_qos,
         [&](const dag_interfaces::msg::Float32Stamped & msg)
         {
             const float v = msg.data;
