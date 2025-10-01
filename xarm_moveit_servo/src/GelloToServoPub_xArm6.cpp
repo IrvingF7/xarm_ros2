@@ -44,6 +44,8 @@ public:
 
     declare_parameter<double>("leader_timeout_s", 0.25);
     declare_parameter<double>("state_timeout_s", 0.25);
+  // Ignore tiny changes in leader joint position between messages (filters jitter before diff)
+  declare_parameter<double>("pos_change_threshold_rad", 0.005);
 
     follower_joint_names_ = get_parameter("follower_joint_names").as_string_array();
 
@@ -63,6 +65,7 @@ public:
     tau_            = get_parameter("vel_filter_tau_s").as_double();
     leader_timeout_ = get_parameter("leader_timeout_s").as_double();
     state_timeout_  = get_parameter("state_timeout_s").as_double();
+  pos_change_thresh_rad_ = get_parameter("pos_change_threshold_rad").as_double();
 
     const size_t N = follower_joint_names_.size();
     follower_pos_.assign(N, 0.0);
@@ -103,8 +106,8 @@ public:
       servo_start_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
 
     RCLCPP_INFO(get_logger(),
-      "Gello→Servo velocity mode: N=%zu, rate=%.1f Hz, kp=%.3f, kd=%.3f, k_ff=%.3f, vmax=%.2f, amax=%.2f, tau=%.3f",
-      N, hz, kp_, kd_, k_ff_, vmax_, amax_, tau_);
+      "Gello→Servo velocity mode: N=%zu, rate=%.1f Hz, kp=%.3f, kd=%.3f, k_ff=%.3f, vmax=%.2f, amax=%.2f, tau=%.3f, dpos_thr=%.6f",
+      N, hz, kp_, kd_, k_ff_, vmax_, amax_, tau_, pos_change_thresh_rad_);
   }
 
 private:
@@ -180,6 +183,16 @@ void on_leader(const JointState::SharedPtr& msg)
     dt = (t_now - last_leader_stamp_).seconds();
   }
   last_leader_stamp_ = t_now;
+
+  // Ignore tiny position steps on leader to reduce jitter before differentiating
+  if (have_leader_last_ && pos_change_thresh_rad_ > 0.0) {
+    for (size_t i=0;i<leader_pos_now_.size();++i) {
+      const double d = wrap(leader_pos_now_[i] - leader_pos_last_[i]);
+      if (std::fabs(d) < pos_change_thresh_rad_) {
+        leader_pos_now_[i] = leader_pos_last_[i];
+      }
+    }
+  }
 
   // Finite-difference leader velocity with unwrap
   if (have_leader_last_ && dt > 1e-4 && dt < 1.0) {
@@ -260,6 +273,7 @@ void on_leader(const JointState::SharedPtr& msg)
   double kp_{4.0}, kd_{0.0}, k_ff_{1.0};
   double vmax_{1.0}, amax_{10.0}, tau_{0.02};
   double leader_timeout_{0.25}, state_timeout_{0.25};
+  double pos_change_thresh_rad_{0.0};
 
   // State
   std::vector<double> follower_pos_, follower_vel_;

@@ -57,7 +57,7 @@ public:
       joint_state_topic_ = "joint_states";
     } else {
       RCLCPP_INFO(get_logger(), "Using real hardware; EE calculated based on /xarm/joint_states.");
-      joint_state_topic_ = "joint_states";
+      joint_state_topic_ = "/xarm/joint_states";
     }
     sub_js_ = create_subscription<sensor_msgs::msg::JointState>(
       joint_state_topic_, rclcpp::SensorDataQoS(),
