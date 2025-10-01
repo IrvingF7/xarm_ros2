@@ -33,6 +33,7 @@ find_package(moveit_ros_planning REQUIRED)
 find_package(moveit REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(xarm_msgs REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -59,6 +60,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   moveit_ros_planning
   moveit_ros_planning_interface
   Eigen3
+  xarm_msgs
 )
 
 include_directories(
@@ -88,7 +90,7 @@ add_executable(xarm_keyboard_input
 ament_target_dependencies(xarm_keyboard_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
 add_executable(xarm_gripper_toggler
-  src/GelloToGripperPub_xArm6.cpp
+  src/GelloToGripperPub_movegroup_xArm6.cpp
 )
 ament_target_dependencies(xarm_gripper_toggler ${THIS_PACKAGE_INCLUDE_DEPENDS})
 

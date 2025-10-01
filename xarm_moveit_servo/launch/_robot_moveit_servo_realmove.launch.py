@@ -27,7 +27,7 @@ def launch_setup(context, *args, **kwargs):
     report_type = LaunchConfiguration('report_type', default='normal')
     baud_checkset = LaunchConfiguration('baud_checkset', default=True)
     default_gripper_baud = LaunchConfiguration('default_gripper_baud', default=2000000)
-    
+
     dof = LaunchConfiguration('dof', default=7)
     robot_type = LaunchConfiguration('robot_type', default='xarm')
     prefix = LaunchConfiguration('prefix', default='')
@@ -63,7 +63,7 @@ def launch_setup(context, *args, **kwargs):
     geometry_mesh_origin_rpy = LaunchConfiguration('geometry_mesh_origin_rpy', default='"0 0 0"')
     geometry_mesh_tcp_xyz = LaunchConfiguration('geometry_mesh_tcp_xyz', default='"0 0 0"')
     geometry_mesh_tcp_rpy = LaunchConfiguration('geometry_mesh_tcp_rpy', default='"0 0 0"')
-    
+
     # 1: xbox360 wired
     # 2: xbox360 wireless
     # 3: spacemouse wireless
@@ -73,10 +73,10 @@ def launch_setup(context, *args, **kwargs):
     moveit_config_package_name = 'xarm_moveit_config'
     controllers_name = 'controllers' if ros2_control_plugin.perform(context) == 'uf_robot_hardware/UFRobotSystemHardware' else 'fake_controllers'
     xarm_type = '{}{}'.format(robot_type.perform(context), dof.perform(context) if robot_type.perform(context) in ('xarm', 'lite') else '')
-    
+
     ros2_control_params = generate_ros2_control_params_temp_file(
         os.path.join(get_package_share_directory('xarm_controller'), 'config', '{}{}_controllers.yaml'.format(robot_type.perform(context), dof.perform(context) if robot_type.perform(context) in ('xarm', 'lite') else '')),
-        prefix=prefix.perform(context), 
+        prefix=prefix.perform(context),
         add_gripper=add_gripper.perform(context) in ('True', 'true'),
         add_bio_gripper=add_bio_gripper.perform(context) in ('True', 'true'),
         ros_namespace=ros_namespace,
@@ -123,7 +123,6 @@ def launch_setup(context, *args, **kwargs):
         geometry_mesh_origin_rpy=geometry_mesh_origin_rpy,
         geometry_mesh_tcp_xyz=geometry_mesh_tcp_xyz,
         geometry_mesh_tcp_rpy=geometry_mesh_tcp_rpy,
-        
     ).to_moveit_configs()
 
     robot_description_parameters = {}
