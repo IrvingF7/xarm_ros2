@@ -104,8 +104,8 @@ ufactory_driver:
       set_position: true
       set_tool_position: false
       set_position_aa: true
-      set_servo_cartesian: false
-      set_servo_cartesian_aa: false
+      set_servo_cartesian: true
+      set_servo_cartesian_aa: true
       set_servo_angle: true
       set_servo_angle_j: true
       move_circle: false
