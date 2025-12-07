@@ -88,7 +88,7 @@ public:
       [this](JointState::SharedPtr msg){ on_follower(std::move(msg)); });
     
     rclcpp::QoS qos_servo_pub(1);
-    qos_servo_pub.best_effort();     // Drop if late
+    qos_servo_pub.reliable();     // Drop if late
     qos_servo_pub.durability_volatile();
     pub_ = create_publisher<JointJog>(servo_cmd_topic_, qos_servo_pub);
 
