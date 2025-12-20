@@ -2,6 +2,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <control_msgs/msg/joint_jog.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
 #include <unordered_map>
@@ -9,10 +10,28 @@
 #include <string>
 #include <algorithm>
 #include <cmath>
+#include <thread>
+#include <atomic>
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/select.h>
 
 using rclcpp::Node;
 using control_msgs::msg::JointJog;
 using sensor_msgs::msg::JointState;
+using geometry_msgs::msg::TwistStamped;
+
+// Key codes for keyboard input
+#define KEYCODE_W 0x77
+#define KEYCODE_A 0x61
+#define KEYCODE_S 0x73
+#define KEYCODE_D 0x64
+#define KEYCODE_Q 0x71
+#define KEYCODE_E 0x65
+#define KEYCODE_Z 0x7A
+#define KEYCODE_X 0x78
+#define KEYCODE_ESC 0x1B
 
 namespace xarm_moveit_servo
 {
@@ -28,7 +47,7 @@ public:
 
     declare_parameter<std::string>("leader_topic", "gello/joint_states");
     declare_parameter<std::string>("follower_states_topic", "/joint_states");
-    declare_parameter<std::string>("servo_cmd_topic", "servo_server/delta_joint_cmds");
+    declare_parameter<std::string>("joint_cmd_topic", "servo_server/delta_joint_cmds");
     declare_parameter<std::string>("servo_start_srv", "/servo_server/start_servo");
 
     declare_parameter<double>("rate_hz", 200.0);
@@ -47,11 +66,18 @@ public:
   // Ignore tiny changes in leader joint position between messages (filters jitter before diff)
   declare_parameter<double>("pos_change_threshold_rad", 0.005);
 
+    // Keyboard twist control parameters
+    declare_parameter<bool>("enable_keyboard_twist", true);
+    declare_parameter<std::string>("twist_cmd_topic", "servo_server/delta_twist_cmds");
+    declare_parameter<std::string>("twist_frame", "link_eef");
+    declare_parameter<double>("twist_linear_speed", 0.15);   // m/s for fine adjustment
+    declare_parameter<double>("twist_angular_speed", 0.3);  // rad/s for fine adjustment
+
     follower_joint_names_ = get_parameter("follower_joint_names").as_string_array();
 
     leader_topic_          = get_parameter("leader_topic").as_string();
     follower_states_topic_ = get_parameter("follower_states_topic").as_string();
-    servo_cmd_topic_       = get_parameter("servo_cmd_topic").as_string();
+    joint_cmd_topic_       = get_parameter("joint_cmd_topic").as_string();
     servo_start_srv_       = get_parameter("servo_start_srv").as_string();
 
     rate_hz_        = get_parameter("rate_hz").as_double();
@@ -66,6 +92,13 @@ public:
     leader_timeout_ = get_parameter("leader_timeout_s").as_double();
     state_timeout_  = get_parameter("state_timeout_s").as_double();
   pos_change_thresh_rad_ = get_parameter("pos_change_threshold_rad").as_double();
+
+    // Keyboard twist parameters
+    enable_keyboard_twist_ = get_parameter("enable_keyboard_twist").as_bool();
+    twist_cmd_topic_ = get_parameter("twist_cmd_topic").as_string();
+    twist_frame_ = get_parameter("twist_frame").as_string();
+    twist_linear_speed_ = get_parameter("twist_linear_speed").as_double();
+    twist_angular_speed_ = get_parameter("twist_angular_speed").as_double();
 
     const size_t N = follower_joint_names_.size();
     follower_pos_.assign(N, 0.0);
@@ -90,7 +123,12 @@ public:
     rclcpp::QoS qos_servo_pub(1);
     qos_servo_pub.reliable();     // Drop if late
     qos_servo_pub.durability_volatile();
-    pub_ = create_publisher<JointJog>(servo_cmd_topic_, qos_servo_pub);
+    pub_ = create_publisher<JointJog>(joint_cmd_topic_, qos_servo_pub);
+
+    // Twist publisher for keyboard control
+    if (enable_keyboard_twist_) {
+      twist_pub_ = create_publisher<TwistStamped>(twist_cmd_topic_, qos_servo_pub);
+    }
 
     // Control loop
     const double hz = std::max(20.0, rate_hz_);
@@ -105,15 +143,114 @@ public:
     if (servo_start_->service_is_ready())
       servo_start_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
 
+    // Start keyboard thread for twist control
+    if (enable_keyboard_twist_) {
+      keyboard_running_.store(true);
+      keyboard_thread_ = std::thread(&GelloToServoPub::keyboardLoop, this);
+      RCLCPP_INFO(get_logger(),
+        "Keyboard twist control enabled (WASD=XY, QE=Z, ZX=RotZ). Frame: %s, linear=%.2f m/s, angular=%.2f rad/s",
+        twist_frame_.c_str(), twist_linear_speed_, twist_angular_speed_);
+    }
+
     RCLCPP_INFO(get_logger(),
       "Gello→Servo velocity mode: N=%zu, rate=%.1f Hz, kp=%.3f, kd=%.3f, k_ff=%.3f, vmax=%.2f, amax=%.2f, tau=%.3f, dpos_thr=%.6f",
       N, hz, kp_, kd_, k_ff_, vmax_, amax_, tau_, pos_change_thresh_rad_);
+  }
+
+  ~GelloToServoPub()
+  {
+    keyboard_running_.store(false);
+    if (keyboard_thread_.joinable()) {
+      keyboard_thread_.join();
+    }
   }
 
 private:
   // Helpers
   static inline double wrap(double d){ return std::atan2(std::sin(d), std::cos(d)); }
   static inline double clamp(double x,double lo,double hi){ return std::max(lo,std::min(hi,x)); }
+
+  // Non-blocking keyboard check
+  bool kbhit()
+  {
+    struct timeval tv = {0, 0};
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    return select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0;
+  }
+
+  // Keyboard loop for twist control (runs in separate thread)
+  void keyboardLoop()
+  {
+    // Save terminal settings
+    struct termios old_termios, new_termios;
+    tcgetattr(STDIN_FILENO, &old_termios);
+    new_termios = old_termios;
+    new_termios.c_lflag &= ~(ICANON | ECHO);  // Non-canonical, no echo
+    new_termios.c_cc[VMIN] = 0;
+    new_termios.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &new_termios);
+
+    RCLCPP_INFO(get_logger(), "Keyboard thread started. Keys: WASD=XY, QE=Z, ZX=RotZ (in EEF frame)");
+
+    while (keyboard_running_.load() && rclcpp::ok()) {
+      if (kbhit()) {
+        char c;
+        if (read(STDIN_FILENO, &c, 1) > 0) {
+          publishTwistFromKey(c);
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Restore terminal settings
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_termios);
+    RCLCPP_INFO(get_logger(), "Keyboard thread stopped.");
+  }
+
+  void publishTwistFromKey(char c)
+  {
+    auto twist_msg = std::make_unique<TwistStamped>();
+    twist_msg->header.stamp = now();
+    twist_msg->header.frame_id = twist_frame_;
+
+    bool should_publish = true;
+
+    switch (c) {
+      case KEYCODE_W:  // Forward (+X in EEF frame)
+        twist_msg->twist.linear.x = twist_linear_speed_;
+        break;
+      case KEYCODE_S:  // Backward (-X in EEF frame)
+        twist_msg->twist.linear.x = -twist_linear_speed_;
+        break;
+      case KEYCODE_A:  // Left (+Y in EEF frame)
+        twist_msg->twist.linear.y = twist_linear_speed_;
+        break;
+      case KEYCODE_D:  // Right (-Y in EEF frame)
+        twist_msg->twist.linear.y = -twist_linear_speed_;
+        break;
+      case KEYCODE_Q:  // Up (+Z in EEF frame)
+        twist_msg->twist.linear.z = twist_linear_speed_;
+        break;
+      case KEYCODE_E:  // Down (-Z in EEF frame)
+        twist_msg->twist.linear.z = -twist_linear_speed_;
+        break;
+      case KEYCODE_Z:  // Rotate CCW around Z
+        twist_msg->twist.angular.z = twist_angular_speed_;
+        break;
+      case KEYCODE_X:  // Rotate CW around Z
+        twist_msg->twist.angular.z = -twist_angular_speed_;
+        break;
+      default:
+        should_publish = false;
+        break;
+    }
+
+    if (should_publish && twist_pub_) {
+      twist_pub_->publish(std::move(twist_msg));
+    }
+  }
 
   // Reorder into follower order. If leader msg has names, use them.
   // If no names but positions length matches, assume same order.
@@ -267,13 +404,18 @@ void on_leader(const JointState::SharedPtr& msg)
 
   // Params
   std::vector<std::string> follower_joint_names_;
-  std::string leader_topic_, follower_states_topic_, servo_cmd_topic_, servo_start_srv_;
+  std::string leader_topic_, follower_states_topic_, joint_cmd_topic_, servo_start_srv_;
   double rate_hz_{200.0}, loop_dt_{0.005};
   double deadband_{1e-4}, vel_deadband_{1e-3};
   double kp_{4.0}, kd_{0.0}, k_ff_{1.0};
   double vmax_{1.0}, amax_{10.0}, tau_{0.02};
   double leader_timeout_{0.25}, state_timeout_{0.25};
   double pos_change_thresh_rad_{0.0};
+
+  // Keyboard twist control params
+  bool enable_keyboard_twist_{true};
+  std::string twist_cmd_topic_, twist_frame_;
+  double twist_linear_speed_{0.15}, twist_angular_speed_{0.3};
 
   // State
   std::vector<double> follower_pos_, follower_vel_;
@@ -285,8 +427,13 @@ void on_leader(const JointState::SharedPtr& msg)
   // ROS
   rclcpp::Subscription<JointState>::SharedPtr leader_sub_, follower_sub_;
   rclcpp::Publisher<JointJog>::SharedPtr pub_;
+  rclcpp::Publisher<TwistStamped>::SharedPtr twist_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr servo_start_;
+
+  // Keyboard thread
+  std::thread keyboard_thread_;
+  std::atomic<bool> keyboard_running_{false};
 };
 } // namespace xarm_moveit_servo
 
