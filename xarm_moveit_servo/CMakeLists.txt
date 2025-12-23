@@ -94,11 +94,17 @@ add_executable(xarm_gripper_toggler
 )
 ament_target_dependencies(xarm_gripper_toggler ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
+add_executable(gello_keyboard_input
+  src/GelloKeyboardToServoPub_xArm6.cpp
+)
+ament_target_dependencies(gello_keyboard_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
+
 install(TARGETS
   xarm_joystick_input
   xarm_gello_input
   xarm_keyboard_input
   xarm_gripper_toggler
+  gello_keyboard_input
   ee_publisher
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib

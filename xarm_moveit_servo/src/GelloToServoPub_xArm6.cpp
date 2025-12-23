@@ -1,37 +1,22 @@
-// src/gello_to_servo_vel.cpp
+// GelloToServoPub - Gello teleoperation to MoveIt Servo velocity commands
+// For keyboard control, use the standalone gello_keyboard_input node
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <control_msgs/msg/joint_jog.hpp>
-#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <std_srvs/srv/set_bool.hpp>
+#include <std_msgs/msg/bool.hpp>
 
 #include <unordered_map>
 #include <vector>
 #include <string>
 #include <algorithm>
 #include <cmath>
-#include <thread>
-#include <atomic>
-#include <termios.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/select.h>
+#include <mutex>
 
 using rclcpp::Node;
 using control_msgs::msg::JointJog;
 using sensor_msgs::msg::JointState;
-using geometry_msgs::msg::TwistStamped;
-
-// Key codes for keyboard input
-#define KEYCODE_W 0x77
-#define KEYCODE_A 0x61
-#define KEYCODE_S 0x73
-#define KEYCODE_D 0x64
-#define KEYCODE_Q 0x71
-#define KEYCODE_E 0x65
-#define KEYCODE_Z 0x7A
-#define KEYCODE_X 0x78
-#define KEYCODE_ESC 0x1B
 
 namespace xarm_moveit_servo
 {
@@ -41,7 +26,7 @@ public:
   explicit GelloToServoPub(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
   : Node("gello_to_servo_vel", options)
   {
-    // --- Parameters (no sign/offset mapping here) ---
+    // --- Parameters ---
     declare_parameter<std::vector<std::string>>("follower_joint_names",
       {"joint1","joint2","joint3","joint4","joint5","joint6"});
 
@@ -63,15 +48,8 @@ public:
 
     declare_parameter<double>("leader_timeout_s", 0.25);
     declare_parameter<double>("state_timeout_s", 0.25);
-  // Ignore tiny changes in leader joint position between messages (filters jitter before diff)
-  declare_parameter<double>("pos_change_threshold_rad", 0.005);
-
-    // Keyboard twist control parameters
-    declare_parameter<bool>("enable_keyboard_twist", true);
-    declare_parameter<std::string>("twist_cmd_topic", "servo_server/delta_twist_cmds");
-    declare_parameter<std::string>("twist_frame", "link_eef");
-    declare_parameter<double>("twist_linear_speed", 0.15);   // m/s for fine adjustment
-    declare_parameter<double>("twist_angular_speed", 0.3);  // rad/s for fine adjustment
+    // Ignore tiny changes in leader joint position between messages (filters jitter before diff)
+    declare_parameter<double>("pos_change_threshold_rad", 0.005);
 
     follower_joint_names_ = get_parameter("follower_joint_names").as_string_array();
 
@@ -91,14 +69,7 @@ public:
     tau_            = get_parameter("vel_filter_tau_s").as_double();
     leader_timeout_ = get_parameter("leader_timeout_s").as_double();
     state_timeout_  = get_parameter("state_timeout_s").as_double();
-  pos_change_thresh_rad_ = get_parameter("pos_change_threshold_rad").as_double();
-
-    // Keyboard twist parameters
-    enable_keyboard_twist_ = get_parameter("enable_keyboard_twist").as_bool();
-    twist_cmd_topic_ = get_parameter("twist_cmd_topic").as_string();
-    twist_frame_ = get_parameter("twist_frame").as_string();
-    twist_linear_speed_ = get_parameter("twist_linear_speed").as_double();
-    twist_angular_speed_ = get_parameter("twist_angular_speed").as_double();
+    pos_change_thresh_rad_ = get_parameter("pos_change_threshold_rad").as_double();
 
     const size_t N = follower_joint_names_.size();
     follower_pos_.assign(N, 0.0);
@@ -121,14 +92,9 @@ public:
       [this](JointState::SharedPtr msg){ on_follower(std::move(msg)); });
     
     rclcpp::QoS qos_servo_pub(1);
-    qos_servo_pub.reliable();     // Drop if late
+    qos_servo_pub.reliable();
     qos_servo_pub.durability_volatile();
     pub_ = create_publisher<JointJog>(joint_cmd_topic_, qos_servo_pub);
-
-    // Twist publisher for keyboard control
-    if (enable_keyboard_twist_) {
-      twist_pub_ = create_publisher<TwistStamped>(twist_cmd_topic_, qos_servo_pub);
-    }
 
     // Control loop
     const double hz = std::max(20.0, rate_hz_);
@@ -143,26 +109,39 @@ public:
     if (servo_start_->service_is_ready())
       servo_start_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
 
-    // Start keyboard thread for twist control
-    if (enable_keyboard_twist_) {
-      keyboard_running_.store(true);
-      keyboard_thread_ = std::thread(&GelloToServoPub::keyboardLoop, this);
-      RCLCPP_INFO(get_logger(),
-        "Keyboard twist control enabled (WASD=XY, QE=Z, ZX=RotZ). Frame: %s, linear=%.2f m/s, angular=%.2f rad/s",
-        twist_frame_.c_str(), twist_linear_speed_, twist_angular_speed_);
-    }
+    // Service to pause/resume Gello control (for keyboard override)
+    pause_srv_ = create_service<std_srvs::srv::SetBool>(
+      "~/set_gello_paused",
+      [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+             std::shared_ptr<std_srvs::srv::SetBool::Response> res) {
+        on_set_paused(req, res);
+      });
+
+    // Also provide a simple toggle service
+    toggle_srv_ = create_service<std_srvs::srv::Trigger>(
+      "~/toggle_gello",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+             std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+        std::lock_guard<std::mutex> lock(pause_mutex_);
+        gello_paused_ = !gello_paused_;
+        if (!gello_paused_) {
+          reset_on_unpause();
+        }
+        res->success = true;
+        res->message = gello_paused_ ? "Gello PAUSED (keyboard override)" : "Gello ACTIVE";
+        RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
+      });
+
+    // Publisher for pause state (so keyboard node can show status)
+    gello_paused_pub_ = create_publisher<std_msgs::msg::Bool>("~/gello_paused", 10);
 
     RCLCPP_INFO(get_logger(),
       "Gello→Servo velocity mode: N=%zu, rate=%.1f Hz, kp=%.3f, kd=%.3f, k_ff=%.3f, vmax=%.2f, amax=%.2f, tau=%.3f, dpos_thr=%.6f",
       N, hz, kp_, kd_, k_ff_, vmax_, amax_, tau_, pos_change_thresh_rad_);
-  }
-
-  ~GelloToServoPub()
-  {
-    keyboard_running_.store(false);
-    if (keyboard_thread_.joinable()) {
-      keyboard_thread_.join();
-    }
+    RCLCPP_INFO(get_logger(),
+      "For keyboard twist control, launch with enable_keyboard:=true or run gello_keyboard_input node separately");
+    RCLCPP_INFO(get_logger(),
+      "Toggle Gello pause: call ~/toggle_gello service or ~/set_gello_paused (SetBool)");
   }
 
 private:
@@ -170,86 +149,39 @@ private:
   static inline double wrap(double d){ return std::atan2(std::sin(d), std::cos(d)); }
   static inline double clamp(double x,double lo,double hi){ return std::max(lo,std::min(hi,x)); }
 
-  // Non-blocking keyboard check
-  bool kbhit()
+  // Handle pause/resume service
+  void on_set_paused(const std::shared_ptr<std_srvs::srv::SetBool::Request>& req,
+                     std::shared_ptr<std_srvs::srv::SetBool::Response>& res)
   {
-    struct timeval tv = {0, 0};
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(STDIN_FILENO, &fds);
-    return select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0;
+    std::lock_guard<std::mutex> lock(pause_mutex_);
+    bool was_paused = gello_paused_;
+    gello_paused_ = req->data;
+    
+    // If we're un-pausing, reset velocity state to avoid sudden movement
+    if (was_paused && !gello_paused_) {
+      reset_on_unpause();
+    }
+    
+    res->success = true;
+    res->message = gello_paused_ ? "Gello PAUSED (keyboard override)" : "Gello ACTIVE";
+    RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
   }
 
-  // Keyboard loop for twist control (runs in separate thread)
-  void keyboardLoop()
+  // Reset velocity state when un-pausing to avoid sudden jumps
+  void reset_on_unpause()
   {
-    // Save terminal settings
-    struct termios old_termios, new_termios;
-    tcgetattr(STDIN_FILENO, &old_termios);
-    new_termios = old_termios;
-    new_termios.c_lflag &= ~(ICANON | ECHO);  // Non-canonical, no echo
-    new_termios.c_cc[VMIN] = 0;
-    new_termios.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSANOW, &new_termios);
-
-    RCLCPP_INFO(get_logger(), "Keyboard thread started. Keys: WASD=XY, QE=Z, ZX=RotZ (in EEF frame)");
-
-    while (keyboard_running_.load() && rclcpp::ok()) {
-      if (kbhit()) {
-        char c;
-        if (read(STDIN_FILENO, &c, 1) > 0) {
-          publishTwistFromKey(c);
-        }
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    // Restore terminal settings
-    tcsetattr(STDIN_FILENO, TCSANOW, &old_termios);
-    RCLCPP_INFO(get_logger(), "Keyboard thread stopped.");
-  }
-
-  void publishTwistFromKey(char c)
-  {
-    auto twist_msg = std::make_unique<TwistStamped>();
-    twist_msg->header.stamp = now();
-    twist_msg->header.frame_id = twist_frame_;
-
-    bool should_publish = true;
-
-    switch (c) {
-      case KEYCODE_W:  // Forward (+X in EEF frame)
-        twist_msg->twist.linear.x = twist_linear_speed_;
-        break;
-      case KEYCODE_S:  // Backward (-X in EEF frame)
-        twist_msg->twist.linear.x = -twist_linear_speed_;
-        break;
-      case KEYCODE_A:  // Left (+Y in EEF frame)
-        twist_msg->twist.linear.y = twist_linear_speed_;
-        break;
-      case KEYCODE_D:  // Right (-Y in EEF frame)
-        twist_msg->twist.linear.y = -twist_linear_speed_;
-        break;
-      case KEYCODE_Q:  // Up (+Z in EEF frame)
-        twist_msg->twist.linear.z = twist_linear_speed_;
-        break;
-      case KEYCODE_E:  // Down (-Z in EEF frame)
-        twist_msg->twist.linear.z = -twist_linear_speed_;
-        break;
-      case KEYCODE_Z:  // Rotate CCW around Z
-        twist_msg->twist.angular.z = twist_angular_speed_;
-        break;
-      case KEYCODE_X:  // Rotate CW around Z
-        twist_msg->twist.angular.z = -twist_angular_speed_;
-        break;
-      default:
-        should_publish = false;
-        break;
-    }
-
-    if (should_publish && twist_pub_) {
-      twist_pub_->publish(std::move(twist_msg));
-    }
+    // Reset velocity tracking - start fresh
+    std::fill(prev_cmd_vel_.begin(), prev_cmd_vel_.end(), 0.0);
+    std::fill(filt_cmd_vel_.begin(), filt_cmd_vel_.end(), 0.0);
+    std::fill(leader_vel_now_.begin(), leader_vel_now_.end(), 0.0);
+    
+    // Reset the "last" leader position to current, so we don't get a velocity spike
+    leader_pos_last_ = leader_pos_now_;
+    
+    // Mark that we need a fresh velocity estimate
+    have_leader_last_ = false;
+    
+    RCLCPP_INFO(get_logger(), "Gello state reset - velocity tracking restarted");
   }
 
   // Reorder into follower order. If leader msg has names, use them.
@@ -303,56 +235,75 @@ private:
     have_follower_ = true;
   }
 
-void on_leader(const JointState::SharedPtr& msg)
-{
-  // Expect Gello already aligned; reorder into follower order
-  if (!reorder_into_follower(*msg, leader_pos_now_)) {
-    have_leader_ = false;
-    return;
-  }
+  void on_leader(const JointState::SharedPtr& msg)
+  {
+    // Expect Gello already aligned; reorder into follower order
+    if (!reorder_into_follower(*msg, leader_pos_now_)) {
+      have_leader_ = false;
+      return;
+    }
 
-  // Get current ROS time from the node clock
-  const rclcpp::Time t_now = now();
+    // Get current ROS time from the node clock
+    const rclcpp::Time t_now = now();
 
-  double dt = 0.0;
-  if (have_leader_last_) {
-    // Only subtract when both stamps come from the same clock
-    dt = (t_now - last_leader_stamp_).seconds();
-  }
-  last_leader_stamp_ = t_now;
+    double dt = 0.0;
+    if (have_leader_last_) {
+      // Only subtract when both stamps come from the same clock
+      dt = (t_now - last_leader_stamp_).seconds();
+    }
+    last_leader_stamp_ = t_now;
 
-  // Ignore tiny position steps on leader to reduce jitter before differentiating
-  if (have_leader_last_ && pos_change_thresh_rad_ > 0.0) {
-    for (size_t i=0;i<leader_pos_now_.size();++i) {
-      const double d = wrap(leader_pos_now_[i] - leader_pos_last_[i]);
-      if (std::fabs(d) < pos_change_thresh_rad_) {
-        leader_pos_now_[i] = leader_pos_last_[i];
+    // Ignore tiny position steps on leader to reduce jitter before differentiating
+    if (have_leader_last_ && pos_change_thresh_rad_ > 0.0) {
+      for (size_t i=0;i<leader_pos_now_.size();++i) {
+        const double d = wrap(leader_pos_now_[i] - leader_pos_last_[i]);
+        if (std::fabs(d) < pos_change_thresh_rad_) {
+          leader_pos_now_[i] = leader_pos_last_[i];
+        }
       }
     }
-  }
 
-  // Finite-difference leader velocity with unwrap
-  if (have_leader_last_ && dt > 1e-4 && dt < 1.0) {
-    for (size_t i=0;i<leader_pos_now_.size();++i) {
-      const double d = wrap(leader_pos_now_[i] - leader_pos_last_[i]);
-      leader_vel_now_[i] = d / dt;
+    // Finite-difference leader velocity with unwrap
+    if (have_leader_last_ && dt > 1e-4 && dt < 1.0) {
+      for (size_t i=0;i<leader_pos_now_.size();++i) {
+        const double d = wrap(leader_pos_now_[i] - leader_pos_last_[i]);
+        leader_vel_now_[i] = d / dt;
+      }
+    } else {
+      std::fill(leader_vel_now_.begin(), leader_vel_now_.end(), 0.0);
     }
-  } else {
-    std::fill(leader_vel_now_.begin(), leader_vel_now_.end(), 0.0);
-  }
 
-  leader_pos_last_ = leader_pos_now_;
-  have_leader_ = true;
-  have_leader_last_ = true;
-}
+    leader_pos_last_ = leader_pos_now_;
+    have_leader_ = true;
+    have_leader_last_ = true;
+  }
 
   void tick()
   {
+    // Publish pause state periodically
+    {
+      std_msgs::msg::Bool pause_msg;
+      pause_msg.data = gello_paused_;
+      gello_paused_pub_->publish(pause_msg);
+    }
+
     if (!have_follower_ || !have_leader_) return;
 
     // Watchdogs
     if ((now() - last_leader_stamp_).seconds()   > leader_timeout_) return;
     if ((now() - last_follower_stamp_).seconds() > state_timeout_)  return;
+
+    // If paused, don't send any commands (keyboard has full control)
+    // But we keep updating state so un-pause is smooth
+    {
+      std::lock_guard<std::mutex> lock(pause_mutex_);
+      if (gello_paused_) {
+        // Keep velocity state zeroed while paused so we don't accumulate
+        std::fill(prev_cmd_vel_.begin(), prev_cmd_vel_.end(), 0.0);
+        std::fill(filt_cmd_vel_.begin(), filt_cmd_vel_.end(), 0.0);
+        return;
+      }
+    }
 
     const size_t N = follower_joint_names_.size();
 
@@ -412,28 +363,25 @@ void on_leader(const JointState::SharedPtr& msg)
   double leader_timeout_{0.25}, state_timeout_{0.25};
   double pos_change_thresh_rad_{0.0};
 
-  // Keyboard twist control params
-  bool enable_keyboard_twist_{true};
-  std::string twist_cmd_topic_, twist_frame_;
-  double twist_linear_speed_{0.15}, twist_angular_speed_{0.3};
-
   // State
   std::vector<double> follower_pos_, follower_vel_;
   std::vector<double> leader_pos_now_, leader_pos_last_, leader_vel_now_;
   std::vector<double> tmp_err_, cmd_vel_raw_, prev_cmd_vel_, filt_cmd_vel_;
-  rclcpp::Time last_leader_stamp_, last_leader_stamp_prev_, last_follower_stamp_;
+  rclcpp::Time last_leader_stamp_, last_follower_stamp_;
   bool have_follower_{false}, have_leader_{false}, have_leader_last_{false};
 
   // ROS
   rclcpp::Subscription<JointState>::SharedPtr leader_sub_, follower_sub_;
   rclcpp::Publisher<JointJog>::SharedPtr pub_;
-  rclcpp::Publisher<TwistStamped>::SharedPtr twist_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr servo_start_;
 
-  // Keyboard thread
-  std::thread keyboard_thread_;
-  std::atomic<bool> keyboard_running_{false};
+  // Pause control (for keyboard override)
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr pause_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr toggle_srv_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr gello_paused_pub_;
+  std::mutex pause_mutex_;
+  bool gello_paused_{false};
 };
 } // namespace xarm_moveit_servo
 

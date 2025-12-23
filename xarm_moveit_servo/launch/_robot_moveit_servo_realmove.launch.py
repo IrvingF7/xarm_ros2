@@ -12,6 +12,7 @@ import yaml
 from ament_index_python import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler, TimerAction
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -45,6 +46,7 @@ def launch_setup(context, *args, **kwargs):
     ros2_control_plugin = LaunchConfiguration('ros2_control_plugin', default='uf_robot_hardware/UFRobotFakeSystemHardware')
 
     teleop_device = LaunchConfiguration('teleop_device', default='gamepad')
+    enable_keyboard = LaunchConfiguration('enable_keyboard', default='false')
 
     add_gripper = LaunchConfiguration('add_gripper', default=False)
     add_vacuum_gripper = LaunchConfiguration('add_vacuum_gripper', default=False)
@@ -321,6 +323,24 @@ def launch_setup(context, *args, **kwargs):
             output='screen',
         )
 
+    # Standalone keyboard node for gello mode (runs in separate terminal for stdin access)
+    gello_keyboard_node = Node(
+        package='xarm_moveit_servo',
+        executable='gello_keyboard_input',
+        name='gello_keyboard_servo_node',
+        output='screen',
+        parameters=[
+            {
+                'twist_cmd_topic': '/servo_server/delta_twist_cmds',
+                'twist_frame': 'link_eef',
+                'twist_linear_speed': 0.05,
+                'twist_angular_speed': 0.1,
+            }
+        ],
+        prefix='xterm -fa "Monospace" -fs 12 -geometry 100x30 -T "Gello+Keyboard Teleop" -e' if enable_keyboard.perform(context) in ('True', 'true') else '',
+        condition=IfCondition(enable_keyboard),
+    )
+
     if add_gripper.perform(context) in ('True', 'true') and robot_type.perform(context) != 'lite':
         move_group_node = Node(
             package='moveit_ros_move_group',
@@ -357,6 +377,7 @@ def launch_setup(context, *args, **kwargs):
             joint_state_publisher_node,
             ros2_control_launch,
             traj_controller_node,
+            gello_keyboard_node,
         ] + controller_nodes + [move_group_node, start_toggler_after_move_group]
 
     return [ # noqa: RUF005
@@ -370,6 +391,7 @@ def launch_setup(context, *args, **kwargs):
         joint_state_publisher_node,
         ros2_control_launch,
         traj_controller_node,
+        gello_keyboard_node,
     ] + controller_nodes
 
 
