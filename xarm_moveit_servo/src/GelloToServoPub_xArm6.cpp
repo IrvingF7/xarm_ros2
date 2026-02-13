@@ -39,12 +39,12 @@ public:
     declare_parameter<double>("deadband_rad", 1e-4);
     declare_parameter<double>("vel_deadband", 1e-3);
     declare_parameter<double>("kp", 4.0);
-    declare_parameter<double>("kd", 0.0);
-    declare_parameter<double>("k_ff", 1.0);
+    declare_parameter<double>("kd", 0.01);
+    declare_parameter<double>("k_ff", 0.6);
 
     declare_parameter<double>("max_vel_per_joint", 1.0);
-    declare_parameter<double>("max_accel_per_joint", 50.0);
-    declare_parameter<double>("vel_filter_tau_s", 0.005);
+    declare_parameter<double>("max_accel_per_joint", 25.0);
+    declare_parameter<double>("vel_filter_tau_s", 0.05);
 
     declare_parameter<double>("leader_timeout_s", 0.25);
     declare_parameter<double>("state_timeout_s", 0.25);
