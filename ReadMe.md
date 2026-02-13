@@ -563,22 +563,22 @@ __Reminder 4: The <hw_ns> described below is replaced with the actual one, the x
         If target object can be properly detected, to run the Grasping node:  
         ```bash
         # xArm 5/6/7
-        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type=xarm dof:=your_xArm_DOF
+        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type:=xarm dof:=your_xArm_DOF
         # Lite6
-        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type=lite dof:=6
+        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type:=lite dof:=6
         # UFACTORY850
-        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type=uf850 dof:=6
+        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type:=uf850 dof:=6
         ```
         For node program source code, refer to: d435i_xarm_setup/src/[findobj_grasp_moveit_planner.cpp](./xarm_vision/d435i_xarm_setup/src/findobj_grasp_moveit_planner.cpp).  
 
         2.Alternatively, to drive xArm motion with ros service provided by 'xarm_api', in this way, real-time performance of network will not be required so strict as moveit way, but execution may fail in the middle if singularity or self-collision is about to occur. 
         ```bash
         # xArm 5/6/7
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type=xarm dof:=your_xArm_DOF robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type:=xarm dof:=your_xArm_DOF robot_ip:=your_xArm_IP
         # Lite6
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type=lite dof:=6 robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type:=lite dof:=6 robot_ip:=your_xArm_IP
         # UFACTORY850
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type=uf850 dof:=6 robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type:=uf850 dof:=6 robot_ip:=your_xArm_IP
 
         # The default calibration parameters are ~/.ros2/easy_handeye2/calibrations/{robot_type}_rs_on_hand_calibration.calib
         # If you need to specify the startup parameter calib_filename, the calibration parameters recorded in the d435i_xarm_setup/config/{calib_filename}.calib file will be used
@@ -586,11 +586,11 @@ __Reminder 4: The <hw_ns> described below is replaced with the actual one, the x
         If target object can be properly detected, to run the Grasping node:  
         ```bash
         # xArm 5/6/7
-        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type=xarm dof:=your_xArm_DOF
+        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type:=xarm dof:=your_xArm_DOF
         # Lite6
-        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type=lite dof:=6
+        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type:=lite dof:=6
         # UFACTORY850
-        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type=uf850 dof:=6
+        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type:=uf850 dof:=6
         ```
         For node program source code, refer to: d435i_xarm_setup/src/[findobj_grasp_xarm_api.cpp](./xarm_vision/d435i_xarm_setup/src/findobj_grasp_xarm_api.cpp).  
 

@@ -536,11 +536,11 @@ __注意4: 以下描述的<hw_ns>用实际的替换，xarm系列默认为xarm, �
         1.使用moveit驱动手臂动作，如果规划成功会保证无碰撞和奇异点的轨迹执行, 但对网络通信稳定性要求较高：
         ```bash
         # xArm 5/6/7
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_moveit_planner.launch.py robot_type=xarm dof:=your_xArm_DOF robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_moveit_planner.launch.py robot_type:=xarm dof:=your_xArm_DOF robot_ip:=your_xArm_IP
         # Lite6
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_moveit_planner.launch.py robot_type=lite dof:=6 robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_moveit_planner.launch.py robot_type:=lite dof:=6 robot_ip:=your_xArm_IP
         # UFACTORY850
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_moveit_planner.launch.py robot_type=uf850 dof:=6 robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_moveit_planner.launch.py robot_type:=uf850 dof:=6 robot_ip:=your_xArm_IP
 
         # 默认使用的标定参数是~/.ros2/easy_handeye2/calibrations/{robot_type}_rs_on_hand_calibration.calib
         # 如果需要指定启动参数calib_filename, 将使用d435i_xarm_setup/config/{calib_filename}.calib文件记录的标定参数
@@ -548,22 +548,22 @@ __注意4: 以下描述的<hw_ns>用实际的替换，xarm系列默认为xarm, �
         如果目标物体可以正常识别，执行抓取节点:  
         ```bash
         # xArm 5/6/7
-        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type=xarm dof:=your_xArm_DOF
+        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type:=xarm dof:=your_xArm_DOF
         # Lite6
-        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type=lite dof:=6
+        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type:=lite dof:=6
         # UFACTORY850
-        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type=uf850 dof:=6
+        ros2 launch d435i_xarm_setup grasp_node_robot_moveit_planner.launch.py robot_type:=uf850 dof:=6
         ```
         节点代码可以参考d435i_xarm_setup/src/[findobj_grasp_moveit_planner.cpp](./xarm_vision/d435i_xarm_setup/src/findobj_grasp_moveit_planner.cpp).  
 
         2.或者使用xarm_api提供的ros service驱动手臂动作，网络稳定性要求不高，但部分时候执行过程中可能报错（奇异点或将要发生自碰撞等）：
         ```bash
         # xArm 5/6/7
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type=xarm dof:=your_xArm_DOF robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type:=xarm dof:=your_xArm_DOF robot_ip:=your_xArm_IP
         # Lite6
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type=lite dof:=6 robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type:=lite dof:=6 robot_ip:=your_xArm_IP
         # UFACTORY850
-        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type=uf850 dof:=6 robot_ip:=your_xArm_IP
+        ros2 launch d435i_xarm_setup d435i_findobj2d_robot_api.launch.py robot_type:=uf850 dof:=6 robot_ip:=your_xArm_IP
 
         # 默认使用的标定参数是~/.ros2/easy_handeye2/calibrations/{robot_type}_rs_on_hand_calibration.calib
         # 如果需要指定启动参数calib_filename, 将使用d435i_xarm_setup/config/{calib_filename}.calib文件记录的标定参数
@@ -571,11 +571,11 @@ __注意4: 以下描述的<hw_ns>用实际的替换，xarm系列默认为xarm, �
         如果目标物体可以正常识别，执行抓取节点:  
         ```bash
         # xArm 5/6/7
-        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type=xarm dof:=your_xArm_DOF
+        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type:=xarm dof:=your_xArm_DOF
         # Lite6
-        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type=lite dof:=6
+        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type:=lite dof:=6
         # UFACTORY850
-        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type=uf850 dof:=6
+        ros2 launch d435i_xarm_setup grasp_node_robot_api.launch.py robot_type:=uf850 dof:=6
         ``` 
         节点代码可以参考d435i_xarm_setup/src/[findobj_grasp_xarm_api.cpp](./xarm_vision/d435i_xarm_setup/src/findobj_grasp_xarm_api.cpp).
 

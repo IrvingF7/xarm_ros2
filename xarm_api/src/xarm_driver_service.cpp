@@ -122,7 +122,7 @@ namespace xarm_api
         service_set_only_check_type_ = _create_service<xarm_msgs::srv::SetInt16>("set_only_check_type", &XArmDriver::_set_only_check_type);
         service_config_tgpio_reset_when_stop_ = _create_service<xarm_msgs::srv::SetInt16>("config_tgpio_reset_when_stop", &XArmDriver::_config_tgpio_reset_when_stop);
         service_config_cgpio_reset_when_stop_ = _create_service<xarm_msgs::srv::SetInt16>("config_cgpio_reset_when_stop", &XArmDriver::_config_cgpio_reset_when_stop);
-        service_set_tgpio_modbus_use_503_port_ = _create_service<xarm_msgs::srv::SetInt16>("set_tgpio_modbus_use_503_port", &XArmDriver::_set_tgpio_modbus_use_503_port);
+        service_set_rs485_use_503_port_ = _create_service<xarm_msgs::srv::SetInt16>("set_rs485_use_503_port", &XArmDriver::_set_rs485_use_503_port);
         // OLD SERVICE
         service_ft_sensor_enable_ = _create_service<xarm_msgs::srv::SetInt16>("ft_sensor_enable", &XArmDriver::_set_ft_sensor_enable);
         service_ft_sensor_app_set_ = _create_service<xarm_msgs::srv::SetInt16>("ft_sensor_app_set", &XArmDriver::_set_ft_sensor_mode);
@@ -136,6 +136,7 @@ namespace xarm_api
         
         // SetInt16List        
         service_set_reduced_tcp_boundary_ = _create_service<xarm_msgs::srv::SetInt16List>("set_reduced_tcp_boundary", &XArmDriver::_set_reduced_tcp_boundary);
+        service_set_external_device_monitor_params_ = _create_service<xarm_msgs::srv::SetInt16List>("set_external_device_monitor_params", &XArmDriver::_set_external_device_monitor_params);
 
         // GetInt32
         service_get_tgpio_modbus_baudrate_ = _create_service<xarm_msgs::srv::GetInt32>("get_tgpio_modbus_baudrate", &XArmDriver::_get_tgpio_modbus_baudrate);
@@ -708,9 +709,9 @@ namespace xarm_api
         return true;
     }
 
-    bool XArmDriver::_set_tgpio_modbus_use_503_port(const std::shared_ptr<xarm_msgs::srv::SetInt16::Request> req, std::shared_ptr<xarm_msgs::srv::SetInt16::Response> res)
+    bool XArmDriver::_set_rs485_use_503_port(const std::shared_ptr<xarm_msgs::srv::SetInt16::Request> req, std::shared_ptr<xarm_msgs::srv::SetInt16::Response> res)
     {
-        res->ret = arm->set_tgpio_modbus_use_503_port(req->data);
+        res->ret = arm->set_rs485_use_503_port(req->data);
         res->message = "data=" + std::to_string(req->data);
         return true;
     }
@@ -760,6 +761,19 @@ namespace xarm_api
         }
         res->message = "datas=[ " + tmp + " ]";
         return true; 
+    }
+
+    bool XArmDriver::_set_external_device_monitor_params(const std::shared_ptr<xarm_msgs::srv::SetInt16List::Request> req, std::shared_ptr<xarm_msgs::srv::SetInt16List::Response> res)
+    {
+        if (req->datas.size() < 2) {
+            res->ret = PARAM_ERROR;
+            return true;
+        }
+        int dev_type = req->datas[0];
+        int frequency = req->datas[1];
+        res->ret = arm->set_external_device_monitor_params(dev_type, frequency);
+        res->message = "datas=[ " + std::to_string(dev_type) + ", " + std::to_string(frequency) + " ]";
+        return true;
     }
 
     bool XArmDriver::_get_tgpio_modbus_baudrate(const std::shared_ptr<xarm_msgs::srv::GetInt32::Request> req, std::shared_ptr<xarm_msgs::srv::GetInt32::Response> res)

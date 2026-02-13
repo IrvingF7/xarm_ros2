@@ -54,11 +54,11 @@
 
     <!-- Specify Mesh file path -->
     <xacro:property name="mesh_suffix" value="${mesh_suffix}" scope="parent"/>
-    <xacro:if value="${ros2_control_plugin == 'gazebo_ros2_control/GazeboSystem' or ros2_control_plugin == 'ign_ros2_control/IgnitionSystem'}">
+    <xacro:if value="${ros2_control_plugin == 'gazebo_ros2_control/GazeboSystem' or ros2_control_plugin == 'ign_ros2_control/IgnitionSystem' or ros2_control_plugin == 'gz_ros2_control/GazeboSimSystem'}">
       <!-- gazebo use -->
       <xacro:property name="mesh_path" value="file://$(find xarm_description)/meshes" scope="parent"/>
     </xacro:if>
-    <xacro:unless value="${ros2_control_plugin == 'gazebo_ros2_control/GazeboSystem' or ros2_control_plugin == 'ign_ros2_control/IgnitionSystem'}">
+    <xacro:unless value="${ros2_control_plugin == 'gazebo_ros2_control/GazeboSystem' or ros2_control_plugin == 'ign_ros2_control/IgnitionSystem' or ros2_control_plugin == 'gz_ros2_control/GazeboSimSystem'}">
       <xacro:property name="mesh_path" value="package://xarm_description/meshes" scope="parent"/>
     </xacro:unless> 
 
@@ -217,7 +217,15 @@
       <xacro:d435i_urdf prefix="${prefix}" add_d435i_links="${add_d435i_links}" />
       <xacro:if value="${add_d435i_links}">
         <xacro:include filename="$(find xarm_description)/urdf/camera/realsense.gazebo.xacro" />    
-        <xacro:realsense_gazebo prefix="${prefix}" />
+        <xacro:if value="${ros2_control_plugin == 'gz_ros2_control/GazeboSimSystem'}">
+          <xacro:realsense_gz prefix="${prefix}" />
+        </xacro:if>
+        <xacro:if value="${ros2_control_plugin == 'ign_ros2_control/IgnitionSystem'}">
+          <xacro:realsense_ignition prefix="${prefix}" />
+        </xacro:if>
+        <xacro:if value="${ros2_control_plugin == 'gazebo_ros2_control/GazeboSystem'}">
+          <xacro:realsense_gazebo prefix="${prefix}" />
+        </xacro:if>
       </xacro:if>
     </xacro:if>
     <xacro:unless value="${add_realsense_d435i}">

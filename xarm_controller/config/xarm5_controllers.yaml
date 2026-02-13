@@ -33,3 +33,4 @@ xarm5_traj_controller:
     interface_name: position
     state_publish_rate: 25.0
     action_monitor_rate: 10.0
+    open_loop_control: true
