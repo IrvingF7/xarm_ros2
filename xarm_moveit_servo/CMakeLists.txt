@@ -27,8 +27,13 @@ find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(moveit_msgs REQUIRED)
+find_package(dag_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
+find_package(moveit REQUIRED)
+find_package(moveit_ros_planning_interface REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(xarm_msgs REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -50,7 +55,12 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   control_msgs
   moveit_msgs
   geometry_msgs
+  dag_interfaces
+  moveit
   moveit_ros_planning
+  moveit_ros_planning_interface
+  Eigen3
+  xarm_msgs
 )
 
 include_directories(
@@ -58,21 +68,45 @@ include_directories(
   ${ament_INCLUDE_DIRS}
 )
 
-add_library(xarm_joystick_input SHARED src/xarm_joystick_input.cpp)
+# add_library(xarm_joystick_input SHARED src/xarm_joystick_input.cpp)
+# ament_target_dependencies(xarm_joystick_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
+# rclcpp_components_register_nodes(xarm_joystick_input "xarm_moveit_servo::JoyToServoPub")
+add_library(xarm_joystick_input SHARED src/JoyToServoPub_xArm6.cpp)
 ament_target_dependencies(xarm_joystick_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 # rclcpp_components_register_nodes(xarm_joystick_input "xarm_moveit_servo::JoyToServoPub")
 rclcpp_components_register_node(xarm_joystick_input PLUGIN "xarm_moveit_servo::JoyToServoPub" EXECUTABLE xarm_joystick_input_node)
+
+add_library(xarm_gello_input SHARED src/GelloToServoPub_xArm6.cpp)
+ament_target_dependencies(xarm_gello_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
+rclcpp_components_register_nodes(xarm_gello_input "xarm_moveit_servo::GelloToServoPub")
+
+add_library(ee_publisher SHARED src/EEPublisher.cpp)
+ament_target_dependencies(ee_publisher ${THIS_PACKAGE_INCLUDE_DEPENDS})
+rclcpp_components_register_nodes(ee_publisher "xarm_moveit_servo::EEPublisher")
+
 
 add_executable(xarm_keyboard_input
   src/xarm_keyboard_input.cpp
 )
 ament_target_dependencies(xarm_keyboard_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
+add_executable(xarm_gripper_toggler
+  src/GelloToGripperPub_movegroup_xArm6.cpp
+)
+ament_target_dependencies(xarm_gripper_toggler ${THIS_PACKAGE_INCLUDE_DEPENDS})
+
+add_executable(gello_keyboard_input
+  src/GelloKeyboardToServoPub_xArm6.cpp
+)
+ament_target_dependencies(gello_keyboard_input ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
 install(TARGETS
   xarm_joystick_input
-  xarm_joystick_input_node
+  xarm_gello_input
   xarm_keyboard_input
+  xarm_gripper_toggler
+  gello_keyboard_input
+  ee_publisher
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib

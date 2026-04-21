@@ -18,6 +18,8 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>dag_interfaces</depend>
+  <depend>xarm_msgs</depend>
   <depend>xarm_description</depend>
   <depend>xarm_controller</depend>
   <depend>xarm_moveit_config</depend>
