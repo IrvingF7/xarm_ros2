@@ -262,21 +262,6 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
     )
 
-    joystick_node = Node(
-        package="xarm_moveit_servo",
-        executable="xarm_joystick_input_node",
-        name="xarm_joystick_input_node",
-        parameters=[
-            servo_params,
-            {
-                'dof': dof, 
-                'ros_queue_size': 10,
-                'joystick_type': joystick_type,
-            },
-        ],
-        output="screen",
-    )
-
     return [
         # RegisterEventHandler(
         #     event_handler=OnProcessExit(
