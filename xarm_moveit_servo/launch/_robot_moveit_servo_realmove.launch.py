@@ -204,6 +204,19 @@ def launch_setup(context, *args, **kwargs):
     #         ],
     #     ))
 
+    # robot_state_publisher must run immediately (not inside the deferred
+    # container) because on Jazzy controller_manager subscribes to the
+    # /robot_description topic to initialize — if it never receives that topic,
+    # the controller spawners can't contact it, so they never exit, so the
+    # OnProcessExit handler never fires, so the container never starts. Deadlock.
+    robot_state_publisher_node = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='screen',
+        parameters=[robot_description_parameters, {'publish_frequency': 50.0}],
+    )
+
     # Launch as much as possible in components
     if teleop_device.perform(context) == "gamepad":
         container = ComposableNodeContainer(
@@ -212,18 +225,6 @@ def launch_setup(context, *args, **kwargs):
             package='rclcpp_components',
             executable='component_container',
             composable_node_descriptions=[
-                ComposableNode(
-                    package='robot_state_publisher',
-                    plugin='robot_state_publisher::RobotStatePublisher',
-                    name='robot_state_publisher',
-                    parameters=[
-                        {
-                            'robot_description': robot_description_parameters,
-                            'publish_frequency': 50.0,
-                        }
-                    ],
-                    extra_arguments=[{'use_intra_process_comms': True}],
-                ),
                 ComposableNode(
                     package='tf2_ros',
                     plugin='tf2_ros::StaticTransformBroadcasterNode',
@@ -273,12 +274,6 @@ def launch_setup(context, *args, **kwargs):
             package='rclcpp_components',
             executable='component_container',
             composable_node_descriptions=[
-                ComposableNode(
-                    package='robot_state_publisher',
-                    plugin='robot_state_publisher::RobotStatePublisher',
-                    name='robot_state_publisher',
-                    parameters=[robot_description_parameters],
-                ),
                 ComposableNode(
                     package='tf2_ros',
                     plugin='tf2_ros::StaticTransformBroadcasterNode',
@@ -373,6 +368,7 @@ def launch_setup(context, *args, **kwargs):
                     on_exit=container,
                 )
             ),
+            robot_state_publisher_node,
             rviz_node,
             joint_state_publisher_node,
             ros2_control_launch,
@@ -387,6 +383,7 @@ def launch_setup(context, *args, **kwargs):
                 on_exit=container,
             )
         ),
+        robot_state_publisher_node,
         rviz_node,
         joint_state_publisher_node,
         ros2_control_launch,
