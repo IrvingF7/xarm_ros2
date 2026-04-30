@@ -41,7 +41,7 @@
 #include <sensor_msgs/msg/joy.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <control_msgs/msg/joint_jog.hpp>
-#include <std_srvs/srv/trigger.hpp>
+#include <moveit_msgs/srv/servo_command_type.hpp>
 #include <moveit_msgs/msg/planning_scene.hpp>
 #include <rclcpp/client.hpp>
 #include <rclcpp/experimental/buffers/intra_process_buffer.hpp>
@@ -188,10 +188,32 @@ public:
     twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(TWIST_TOPIC, rclcpp::SystemDefaultsQoS());
     joint_pub_ = this->create_publisher<control_msgs::msg::JointJog>(JOINT_TOPIC, rclcpp::SystemDefaultsQoS());
 
-    // Create a service client to start the ServoNode
-    servo_start_client_ = this->create_client<std_srvs::srv::Trigger>("/servo_server/start_servo");
-    servo_start_client_->wait_for_service(std::chrono::seconds(1));
-    servo_start_client_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+    // Jazzy: start_servo is gone; use switch_command_type to declare which command modality
+    // we're sending (JOINT_JOG=0, TWIST=1, POSE=2). Until this is set, Servo drops every input
+    // with "Command type has not been set, cannot accept input".
+    switch_cmd_type_client_ = this->create_client<moveit_msgs::srv::ServoCommandType>(
+        "/servo_server/switch_command_type");
+    (void)switch_cmd_type_client_->wait_for_service(std::chrono::seconds(2));
+  }
+
+  void switchServoCommandType(int8_t type)
+  {
+    if (type == current_command_type_) return;
+    if (!switch_cmd_type_client_ || !switch_cmd_type_client_->service_is_ready()) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                           "switch_command_type service not ready, skipping");
+      return;
+    }
+    auto req = std::make_shared<moveit_msgs::srv::ServoCommandType::Request>();
+    req->command_type = type;
+    switch_cmd_type_client_->async_send_request(req,
+      [this, type](rclcpp::Client<moveit_msgs::srv::ServoCommandType>::SharedFuture fut) {
+        auto res = fut.get();
+        if (res->success)
+          current_command_type_ = type;
+        else
+          RCLCPP_WARN(get_logger(), "switch_command_type(%d) failed", type);
+      });
   }
 
   void joyCB(const sensor_msgs::msg::Joy::ConstSharedPtr& msg)
@@ -214,6 +236,7 @@ public:
     // Convert the joystick message to Twist or JointJog and publish
     if (convertJoyToCmd(msg->axes, msg->buttons, twist_msg, joint_msg, SPEED_MULTIPLIER))
     {
+      switchServoCommandType(moveit_msgs::srv::ServoCommandType::Request::TWIST);
       // publish the TwistStamped
       twist_msg->header.frame_id = frame_to_publish_;
       twist_msg->header.stamp = this->now();
@@ -221,6 +244,7 @@ public:
     }
     else
     {
+      switchServoCommandType(moveit_msgs::srv::ServoCommandType::Request::JOINT_JOG);
       // publish the JointJog
       joint_msg->header.stamp = this->now();
       joint_msg->header.frame_id = "link3";
@@ -232,7 +256,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr joint_pub_;
-  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr servo_start_client_;
+  rclcpp::Client<moveit_msgs::srv::ServoCommandType>::SharedPtr switch_cmd_type_client_;
 
   std::string frame_to_publish_;
 
@@ -240,6 +264,8 @@ private:
 
   std::queue<int> debounce_buffer;
   int debounce_buffer_old = 0;
+
+  int8_t current_command_type_ = -1;
 };  // class JoyToServoPub
 
 }  // namespace moveit_servo
